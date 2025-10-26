@@ -1,0 +1,10 @@
+"%s\n" \
+".DS_Store" \
+".vscode/" \
+"__pycache__/" \
+"*.pyc" \
+"build/" \
+".idea/" \
+".env" \
+".venv/" \
+"*.log" \
