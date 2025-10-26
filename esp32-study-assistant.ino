@@ -1,5 +1,5 @@
 /*  EIE3127 – Study Environment Monitor + Blynk (ESP32-S3 UNO)
-    Wiring (unchanged):
+    Wiring:
       OLED SSD1306 I2C: SDA=IO4, SCL=IO5 (3V3)
       DHT11: DATA=IO17 (3V3)
       LDR AO: IO7 (3V3)
@@ -9,7 +9,7 @@
 */
 
 #include <Arduino.h>
-// #include <WiFi.h>
+
 #include "secrets.h"     // define WIFI_SSID, WIFI_PASS, BLYNK_AUTH
 #include <BlynkSimpleEsp32.h>
 
@@ -19,7 +19,7 @@
 #define PIN_I2C_SDA   4
 #define PIN_I2C_SCL   5
 #define PIN_DHT       17
-#define PIN_LDR_AO     7
+#define PIN_LDR_AO    7
 
 // RGB-A (environment judgement) — ACTIVE-HIGH
 #define LEDA_R        13
@@ -50,17 +50,29 @@ static inline void setActiveState(int idx) {
   using DM = EnvMonitor::DetMode;
   switch (idx) {
     case 0: env.setDetectionMode(DM::DET_DISTRACTED); break; // V0
-    case 1: env.setDetectionMode(DM::DET_AWAY);        break; // V1
-    case 2: env.setDetectionMode(DM::DET_FOCUSED);     break; // V2
-    default: env.setDetectionMode(DM::DET_NONE);       break;
+    case 1: env.setDetectionMode(DM::DET_AWAY);       break; // V1
+    case 2: env.setDetectionMode(DM::DET_FOCUSED);    break; // V2
+    default: env.setDetectionMode(DM::DET_NONE);      break;
   }
 }
 
-static inline void bounceBackIfBusy(uint8_t vpin) {
-  // If some state is already active, reject new ON command and reset that widget to 0
-  if (g_activeStateIndex != -1) {
-    Blynk.virtualWrite(vpin, 0);
+static inline uint8_t vpinFromIndex(int idx) {
+  return (idx == 0) ? V0 : (idx == 1) ? V1 : (idx == 2) ? V2 : 255;
+}
+
+static inline void switchTo(int newIdx, uint8_t newVpin) {
+  // Turn OFF previous (if any) and turn ON the new one, keeping exclusivity.
+  if (g_activeStateIndex == newIdx) {
+    // Already active; just ensure widget shows ON
+    Blynk.virtualWrite(newVpin, 1);
+    return;
   }
+  if (g_activeStateIndex != -1) {
+    uint8_t prevVpin = vpinFromIndex(g_activeStateIndex);
+    if (prevVpin != 255) Blynk.virtualWrite(prevVpin, 0);
+  }
+  setActiveState(newIdx);
+  Blynk.virtualWrite(newVpin, 1);
 }
 
 // ----- Blynk handlers -----
@@ -68,8 +80,7 @@ static inline void bounceBackIfBusy(uint8_t vpin) {
 BLYNK_WRITE(V0) {
   int val = param.asInt();
   if (val == 1) {
-    if (g_activeStateIndex == -1) setActiveState(0);
-    else                          bounceBackIfBusy(V0);
+    switchTo(0, V0);
   } else {
     if (g_activeStateIndex == 0) setActiveState(-1);
   }
@@ -79,8 +90,7 @@ BLYNK_WRITE(V0) {
 BLYNK_WRITE(V1) {
   int val = param.asInt();
   if (val == 1) {
-    if (g_activeStateIndex == -1) setActiveState(1);
-    else                          bounceBackIfBusy(V1);
+    switchTo(1, V1);
   } else {
     if (g_activeStateIndex == 1) setActiveState(-1);
   }
@@ -90,8 +100,7 @@ BLYNK_WRITE(V1) {
 BLYNK_WRITE(V2) {
   int val = param.asInt();
   if (val == 1) {
-    if (g_activeStateIndex == -1) setActiveState(2);
-    else                          bounceBackIfBusy(V2);
+    switchTo(2, V2);
   } else {
     if (g_activeStateIndex == 2) setActiveState(-1);
   }
@@ -108,7 +117,7 @@ void setup() {
   // Init environment monitor
   env.begin();
 
-  // Ensure dashboard sync (optional)
+  // Ensure dashboard sync
   Blynk.syncVirtual(V0, V1, V2);
 }
 
