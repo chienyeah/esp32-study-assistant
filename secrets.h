@@ -1,7 +1,8 @@
 #pragma once
-#define WIFI_SSID   "HMT-Freshmen"
-#define WIFI_PASS   "sao3996hmt"
+#define WIFI_SSID   "ZTE_BF6B91"
+#define WIFI_PASS   "7EC5622M72"
 
-#define BLYNK_TEMPLATE_ID "TMPL6ZkR9uErz"
-#define BLYNK_TEMPLATE_NAME "Blynk Exercise"
-#define BLYNK_AUTH_TOKEN "lFGJwyZ2cMg2HD6DJIT27pe7suaiI8Wm"
+#define BLYNK_TEMPLATE_ID "TMPL6Aa3qBmmY"
+#define BLYNK_TEMPLATE_NAME "StudyAssistant"
+#define BLYNK_AUTH_TOKEN "gLNztcV4mo_QL8rNxhRCyRDEZQ1JRO7H"
+
