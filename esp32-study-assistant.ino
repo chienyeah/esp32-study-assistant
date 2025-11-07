@@ -25,6 +25,16 @@
 #define LEDB_G        12
 #define PIN_BUZZER    18
 
+// Blynk Virtual Pins
+#define V0 0  // Distracted
+#define V1 1  // Away  
+#define V2 2  // Focused
+#define V4 4  // Temperature
+#define V5 5  // Humidity
+#define V6 6  // Light
+#define V7 7  // Session control
+#define V8 8  // Focus ratio
+
 // Create the monitor
 EnvMonitor env(PIN_DHT, PIN_LDR_AO,
                LEDA_R, LEDA_Y, LEDA_G,
@@ -268,28 +278,32 @@ BLYNK_WRITE(V1) {
   }
 }
 
+// Blynk handler for V2 - Focused Switch
 BLYNK_WRITE(V2) {
   int state = param.asInt();
   if (state == 1) {
     env.setDetectionMode(EnvMonitor::DET_FOCUSED);
     currentFocusState = "FOCUSED";
-    // Only add focus time if session is active
-    if (sessionActive) {
-      focusTime += 30; // Add 30 seconds of focus time
-      Serial.printf("Added 30s focus time. Total: %lu seconds\n", focusTime);
-    }
     lastFocusUpdate = millis();
     Serial.println("Blynk V2: FOCUSED");
+    // REMOVED the focusTime += 30 line to prevent double-counting
   }
 }
 
 void updateFocusTimeTracking() {
-  if (sessionActive && currentFocusState == "FOCUSED") {
-    static unsigned long lastFocusIncrement = 0;
-    if (millis() - lastFocusIncrement > 1000) { // Every second
-      focusTime++;
-      lastFocusIncrement = millis();
+  static unsigned long lastFocusCheck = 0;
+  static String previousFocusState = "UNKNOWN";
+  
+  if (millis() - lastFocusCheck > 1000) { // Check every second
+    if (sessionActive) {
+      // Only count time when actually in FOCUSED state
+      if (currentFocusState == "FOCUSED") {
+        focusTime++;
+        Serial.printf("Focus time: %lu seconds\n", focusTime);
+      }
     }
+    lastFocusCheck = millis();
+    previousFocusState = currentFocusState;
   }
 }
 
@@ -334,8 +348,11 @@ void handleSerialCommand() {
     if (blynkConnected) {
       Blynk.virtualWrite(V7, 0);
     } else {
+      unsigned long totalTime = (millis() - sessionStartTime) / 1000;
+      float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
+      Serial.printf("⏹️ Session ENDED - Focus: %lus/%lus (%.1f%%)\n", 
+                   focusTime, totalTime, focusRatio * 100);
       sessionActive = false;
-      Serial.println("Session STOPPED (manual)");
     }
   } else if (command == "FOCUSED") {
     env.setDetectionMode(DM::DET_FOCUSED);
@@ -393,6 +410,7 @@ void printStatus() {
     unsigned long totalTime = (millis() - sessionStartTime) / 1000;
     float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
     Serial.printf("Session Time: %lu:%02lu\n", totalTime / 60, totalTime % 60);
+    Serial.printf("Focus Time: %lu:%02lu\n", focusTime / 60, focusTime % 60);
     Serial.printf("Focus Ratio: %.1f%%\n", focusRatio * 100);
   }
 }

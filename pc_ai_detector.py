@@ -10,39 +10,39 @@ import tempfile
 import os
 import paho.mqtt.client as mqtt
 from datetime import datetime
+import threading
 
 # ========== CONFIGURATION ==========
-# Blynk IoT Platform details
 BLYNK_AUTH_TOKEN = "gLNztcV4mo_QL8rNxhRCyRDEZQ1JRO7H"
 BLYNK_TEMPLATE_ID = "TMPL6Aa3qBmmY"
 BLYNK_URL = "https://blynk.cloud/external/api"
 
-# Teachable Machine model details
-TM_MODEL_URL = "https://teachablemachine.withgoogle.com/models/3T25HgYt7/"
-MODEL_JSON_URL = TM_MODEL_URL + "model.json"
-MODEL_WEIGHTS_URL = TM_MODEL_URL + "model.weights.bin"
+# Model path configuration
+MODEL_BASE_NAME = os.path.join(os.path.dirname(__file__), "EIE3127_StudyAssistant")
 
 # MQTT Configuration
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = f"study_assistant_pc_{int(time.time())}"
-
-# MQTT Topics
 TOPIC_FOCUS_STATE = "studyassistant/focus/state"
 TOPIC_FOCUS_CONFIDENCE = "studyassistant/focus/confidence"
 TOPIC_ALERT = "studyassistant/alert/trigger"
 TOPIC_SESSION = "studyassistant/session/events"
+TOPIC_TEMPERATURE = "studyassistant/env/temperature" 
+TOPIC_HUMIDITY = "studyassistant/env/humidity"    
+TOPIC_LIGHT_LEVEL = "studyassistant/env/light"    
+ENV_DATA_POLL_INTERVAL = 5  # Poll every 5 seconds
 
 # ========== MQTT MANAGER ==========
 class MQTTManager:
     def __init__(self):
-        # Specify callback API version (required for newer paho-mqtt)
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, MQTT_CLIENT_ID)
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
         self.connected = False
         self.session_start_time = None
+        self.session_active = False
         
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
@@ -65,7 +65,7 @@ class MQTTManager:
             print(f"Connecting to MQTT broker: {MQTT_BROKER}:{MQTT_PORT}")
             self.client.connect(MQTT_BROKER, MQTT_PORT, 60)
             self.client.loop_start()
-            time.sleep(1)  # Wait for connection
+            time.sleep(1)
             return True
         except Exception as e:
             print(f"MQTT connection error: {e}")
@@ -74,24 +74,95 @@ class MQTTManager:
     def publish_focus_state(self, posture, confidence):
         if not self.connected:
             return False
-            
         try:
-            # Publish focus state
+            # Existing MQTT publish logic
             self.client.publish(TOPIC_FOCUS_STATE, posture)
-            
-            # Publish confidence
             self.client.publish(TOPIC_FOCUS_CONFIDENCE, str(confidence))
-            
             print(f"✓ MQTT: Published {posture} with {confidence:.2f} confidence")
+
+            # New: Update Blynk pins
+            self.update_blynk_pins(posture)
+
             return True
         except Exception as e:
             print(f"MQTT publish error: {e}")
             return False
         
+    def get_blynk_environmental_data(self):
+        """Retrieve V4 (temperature), V5 (humidity), V6 (light) values from Blynk"""
+        try:
+            # Construct URLs for each virtual pin
+            temp_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v4"
+            humidity_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v5"
+            light_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v6"
+            
+            # Make HTTP GET requests to Blynk API
+            temperature = float(requests.get(temp_url, timeout=5).text)
+            humidity = float(requests.get(humidity_url, timeout=5).text)
+            light_level = float(requests.get(light_url, timeout=5).text)
+            
+            print(f"✓ Blynk data retrieved - Temp: {temperature}°C, Humi: {humidity}%, Light: {light_level}%")
+            return temperature, humidity, light_level
+            
+        except Exception as e:
+            print(f"✗ Blynk environmental data retrieval error: {e}")
+            return None, None, None
+
+    def get_blynk_session_control(self):
+        """Retrieve V7 (session control) value from Blynk - returns True for start, False for stop"""
+        try:
+            # Construct URL for V7 pin
+            session_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v7"
+            
+            # Make HTTP GET request to Blynk API
+            session_value = int(requests.get(session_url, timeout=5).text)
+            
+            # V7 is a switch: 1 = start session, 0 = stop session
+            session_state = bool(session_value)
+            print(f"✓ Blynk session control retrieved - V7: {session_value} ({'START' if session_state else 'STOP'})")
+            return session_state
+            
+        except Exception as e:
+            print(f"✗ Blynk session control retrieval error: {e}")
+            return None
+        
+    def publish_environmental_data(self, temperature, humidity, light_level):
+        if not self.connected:
+            return False
+        try:
+            # Publish each environmental parameter to its topic
+            self.client.publish(TOPIC_TEMPERATURE, f"{temperature:.1f}")
+            self.client.publish(TOPIC_HUMIDITY, f"{humidity:.0f}")
+            self.client.publish(TOPIC_LIGHT_LEVEL, f"{light_level:.0f}")
+            
+            print(f"✓ MQTT: Published env data - Temp: {temperature:.1f}°C, Humi: {humidity}%, Light: {light_level}%")
+            return True
+        except Exception as e:
+            print(f"MQTT environmental publish error: {e}")
+            return False
+
+    def handle_session_control(self, session_state):
+        """Handle session control based on V7 value from Blynk"""
+        if session_state is None:
+            return
+            
+        if session_state and not self.session_active:
+            # Start session
+            self.start_session()
+            self.session_active = True
+            print("✓ Session STARTED via Blynk V7")
+            self.publish_session_event("session_started", "Study session started via Blynk V7")
+            
+        elif not session_state and self.session_active:
+            # Stop session
+            self.end_session()
+            self.session_active = False
+            print("✓ Session STOPPED via Blynk V7")
+            self.publish_session_event("session_ended", "Study session ended via Blynk V7")
+        
     def publish_alert(self, alert_type, message, confidence=0.0):
         if not self.connected:
             return False
-            
         try:
             alert_data = json.dumps({
                 "type": alert_type,
@@ -109,7 +180,6 @@ class MQTTManager:
     def publish_session_event(self, event_type, description):
         if not self.connected:
             return False
-            
         try:
             event_data = json.dumps({
                 "event": event_type,
@@ -125,19 +195,18 @@ class MQTTManager:
             
     def start_session(self):
         self.session_start_time = datetime.now()
-        self.publish_session_event("session_started", "Study session started")
+        self.publish_session_event("session_started", "Study session started via Blynk V7")
         print("✓ Study session started")
         
     def end_session(self):
         if self.session_start_time:
             duration = datetime.now() - self.session_start_time
             self.publish_session_event("session_ended", 
-                                     f"Study session ended. Duration: {duration}")
+                                     f"Study session ended via Blynk V7. Duration: {duration}")
             print(f"✓ Study session ended. Duration: {duration}")
             self.session_start_time = None
             
     def disconnect(self):
-        """Safe disconnect from MQTT"""
         try:
             if self.connected:
                 self.client.loop_stop()
@@ -146,473 +215,347 @@ class MQTTManager:
         except Exception as e:
             print(f"MQTT disconnect error: {e}")
 
+    def update_blynk_pins(self, state):
+        """Update Blynk virtual pins based on detected state (only V0, V1, V2)"""
+        if not BLYNK_AUTH_TOKEN:
+            print("✗ Blynk auth token missing - skipping update")
+            return False
+
+        try:
+            # Reset all state pins first (ensure only one state is active)
+            requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0&v1=0&v2=0")
+
+            # Map detected state to corresponding virtual pin
+            if state == "Distracted" or state == "Distracted - Phone":
+                # Set V0 (Distracted) to 1
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=1")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=0")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=0")
+            elif state == "Away":
+                # Set V1 (Away) to 1
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=1")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=0")
+            elif state == "Focus":
+                # Set V2 (Focused) to 1
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=0")
+                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=1")
+
+            print(f"✓ Blynk updated: {state} (V0/V1/V2)")
+            return True
+
+        except Exception as e:
+            print(f"✗ Blynk update error: {e}")
+            return False
+
 # ========== POSE CLASSIFIER ==========
 class PoseClassifier:
     def __init__(self):
         self.model = None
         self.class_names = []
         self.is_loaded = False
+        self.input_size = (224, 224)
+        self.is_multi_input = False
         
     def load_model(self):
-        """Load the actual Teachable Machine TensorFlow.js model"""
+        """Load Teachable Machine model with error handling"""
         try:
-            print("Loading Teachable Machine model...")
+            print("Loading Teachable Machine Pose Model...")
+
+            model_dir = MODEL_BASE_NAME
+            h5_path = os.path.join(model_dir, "keras_model.h5")
+            labels_path = os.path.join(model_dir, "labels.txt")
             
-            # Download and parse metadata
-            print("Downloading model metadata...")
-            with urllib.request.urlopen(MODEL_JSON_URL) as response:
-                model_json = json.loads(response.read())
-            
-            # Extract class names from model JSON
-            if 'modelTopology' in model_json and 'weightsManifest' in model_json:
-                print("✓ Model JSON loaded successfully")
+            print(f"Looking for model in: {model_dir}")
+            print(f"h5 path: {h5_path}")
+            print(f"labels path: {labels_path}")
+
+            if not os.path.exists(h5_path):
+                print(f"✗ Model file not found at: {h5_path}")
+                return False
                 
-                # For TensorFlow.js models, we need to convert them to TensorFlow format
-                # This is a simplified approach - we'll create a similar model architecture
-                self._create_similar_model()
+            if not os.path.exists(labels_path):
+                print(f"✗ Labels file not found at: {labels_path}")
+                return False
+            
+            # Load labels
+            self.class_names = self._load_labels(labels_path)
+            print(f"✓ Loaded labels: {self.class_names}")
+            
+            # Load the h5 model using method 1
+            if self._load_h5_model(h5_path):
+                self.is_loaded = True
+                print("✓ Model loaded successfully")
                 return True
             else:
-                print("✗ Invalid model format")
+                print("✗ Failed to load h5 model")
                 return False
                 
         except Exception as e:
-            print(f"✗ Error loading Teachable Machine model: {e}")
-            print("Falling back to heuristic detection...")
-            return self._setup_fallback_detection()
-    
-    def _create_similar_model(self):
-        """Create a model with similar architecture to Teachable Machine"""
-        try:
-            # Teachable Machine typically uses MobileNetV2 or similar architecture
-            self.model = keras.Sequential([
-                keras.layers.InputLayer(input_shape=(224, 224, 3)),
-                keras.layers.Conv2D(32, (3, 3), activation='relu'),
-                keras.layers.MaxPooling2D((2, 2)),
-                keras.layers.Conv2D(64, (3, 3), activation='relu'),
-                keras.layers.MaxPooling2D((2, 2)),
-                keras.layers.Conv2D(64, (3, 3), activation='relu'),
-                keras.layers.Flatten(),
-                keras.layers.Dense(64, activation='relu'),
-                keras.layers.Dense(3, activation='softmax')  # Assuming 3 classes
-            ])
-            
-            self.class_names = ['Focus', 'Distracted', 'Away']  # Adjust based on your actual classes
-            self.is_loaded = True
-            print("✓ Created model with similar architecture")
-            print(f"✓ Classes: {self.class_names}")
-            
-        except Exception as e:
-            print(f"✗ Error creating model: {e}")
+            print(f"✗ Model load error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
-    def _setup_fallback_detection(self):
-        """Setup fallback detection when TM model fails to load"""
-        self.class_names = ['Focus', 'Distracted', 'Away']
-        self.is_loaded = True
-        print("✓ Using fallback detection")
+    def _load_h5_model(self, h5_path):
+        """Load h5 model with DepthwiseConv2D compatibility fix"""
+        from tensorflow.keras.layers import DepthwiseConv2D
+        import tensorflow.keras.utils as keras_utils
+
+        # Custom DepthwiseConv2D that ignores unsupported 'groups' parameter
+        class CustomDepthwiseConv2D(DepthwiseConv2D):
+            def __init__(self, *args, **kwargs):
+                # Remove 'groups' if present (not supported in all TF versions)
+                kwargs.pop('groups', None)
+                super().__init__(*args, **kwargs)
+
+        custom_objects = {
+            'DepthwiseConv2D': CustomDepthwiseConv2D,
+            'DepthwiseConv2D': keras_utils.get_custom_objects().get('DepthwiseConv2D', CustomDepthwiseConv2D)
+        }
+
+        self.model = tf.keras.models.load_model(
+            h5_path,
+            compile=False,
+            custom_objects=custom_objects
+        )
+        self._analyze_model()
         return True
     
-    def preprocess_frame(self, frame):
-        """Preprocess frame for Teachable Machine model"""
-        # Resize to Teachable Machine's expected input size
-        resized = cv2.resize(frame, (224, 224))
-        # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    def _analyze_model(self):
+        """Analyze the loaded model structure"""
+        if self.model is None:
+            return
+            
+        input_shape = self.model.input_shape
+        
+        if isinstance(input_shape, list):
+            self.is_multi_input = True
+            if len(input_shape) > 0 and input_shape[0] is not None:
+                self.input_size = (input_shape[0][1], input_shape[0][2])
+            print(f"✓ Model analysis: Multi-input ({len(input_shape)} inputs), size: {self.input_size}")
+        else:
+            self.is_multi_input = False
+            if input_shape is not None:
+                self.input_size = (input_shape[1], input_shape[2])
+            print(f"✓ Model analysis: Single input, size: {self.input_size}")
+    
+    def _load_labels(self, labels_path):
+        """Load labels from text file"""
+        with open(labels_path, 'r') as f:
+            return [line.strip().split(' ', 1)[1] for line in f if line.strip()]
+    
+    def preprocess_image(self, frame):
+        """Preprocess image for model prediction"""
+        # Resize to model input size
+        img = cv2.resize(frame, self.input_size)
+        # Convert to RGB (Teachable Machine uses RGB)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         # Normalize pixel values to [0, 1]
-        normalized = rgb_frame.astype(np.float32) / 255.0
+        img = img / 255.0
         # Add batch dimension
-        batched = np.expand_dims(normalized, axis=0)
-        return batched
+        return np.expand_dims(img, axis=0)
     
-    def classify_pose(self, frame):
-        """Classify pose using Teachable Machine model"""
-        if not self.is_loaded:
-            return "UNKNOWN", 0.0
-        
-        try:
-            # Preprocess the frame
-            processed_frame = self.preprocess_frame(frame)
+    def predict(self, frame):
+        """Make prediction on frame"""
+        if not self.is_loaded or self.model is None:
+            return None, 0.0
             
-            # If we have a real model, use it
-            if self.model is not None:
-                predictions = self.model.predict(processed_frame, verbose=0)
-                predicted_class_idx = np.argmax(predictions[0])
-                confidence = predictions[0][predicted_class_idx]
-                
-                if predicted_class_idx < len(self.class_names):
-                    return self.class_names[predicted_class_idx], float(confidence)
-                else:
-                    return "UNKNOWN", float(confidence)
+        try:
+            processed = self.preprocess_image(frame)
+            
+            # Handle multi-input models
+            if self.is_multi_input:
+                predictions = self.model.predict([processed])[0]
             else:
-                # Fallback to heuristic detection
-                return self._classify_fallback(frame)
+                predictions = self.model.predict(processed)[0]
                 
-        except Exception as e:
-            print(f"Classification error: {e}")
-            return self._classify_fallback(frame)
-    
-    def _classify_fallback(self, frame):
-        """Fallback classification using face detection"""
-        try:
-            # Load face cascade
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            max_index = np.argmax(predictions)
+            confidence = float(predictions[max_index])
+            class_name = self.class_names[max_index] if max_index < len(self.class_names) else "Unknown"
             
-            if face_cascade.empty():
-                return "UNKNOWN", 0.5
-            
-            # Convert to grayscale
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            height, width = gray.shape
-            
-            # Detect faces
-            faces = face_cascade.detectMultiScale(gray, 1.1, 4, minSize=(50, 50))
-            
-            if len(faces) == 0:
-                return "Away", 0.8
-            
-            # Analyze face position
-            for (x, y, w, h) in faces:
-                face_center_x = x + w//2
-                screen_center_x = width // 2
-                
-                offset_ratio = abs(face_center_x - screen_center_x) / (width * 0.5)
-                confidence = max(0.6, 1.0 - offset_ratio)
-                
-                if offset_ratio < 0.2:
-                    return "Focus", confidence
-                elif offset_ratio < 0.5:
-                    return "Distracted", confidence
-                else:
-                    return "Away", confidence
-            
-            return "UNKNOWN", 0.5
+            return class_name, confidence
             
         except Exception as e:
-            print(f"Fallback classification error: {e}")
-            return "UNKNOWN", 0.5
+            print(f"Prediction error: {e}")
+            return None, 0.0
 
-# ========== BLYNK FUNCTIONS ==========
-def test_blynk_connection():
-    """Test connection to Blynk IoT Platform"""
-    print("Testing Blynk IoT Platform connection...")
-    try:
-        test_url = f"{BLYNK_URL}/isHardwareConnected?token={BLYNK_AUTH_TOKEN}"
-        response = requests.get(test_url, timeout=10)
+# ========== MAIN APPLICATION ==========
+class StudyAssistantApp:
+    def __init__(self):
+        self.classifier = PoseClassifier()
+        self.mqtt = MQTTManager()
+        self.running = False
+        self.cap = None
+        self.last_env_poll_time = 0
+        self.last_session_poll_time = 0
+        self.blynk_thread = None
+        self.stop_blynk_thread = False
         
-        if response.status_code == 200:
-            print("✓ Connected to Blynk IoT Platform successfully")
-            return True
-        else:
-            print(f"✗ Blynk connection failed. Status: {response.status_code}")
+    def start_blynk_polling(self):
+        """Run Blynk polling in a separate thread to avoid lag"""
+        while self.running and not self.stop_blynk_thread:
+            try:
+                # Poll environmental data
+                temperature, humidity, light_level = self.mqtt.get_blynk_environmental_data()
+                if temperature is not None and humidity is not None and light_level is not None:
+                    self.mqtt.publish_environmental_data(temperature, humidity, light_level)
+                
+                # Poll session control
+                session_state = self.mqtt.get_blynk_session_control()
+                if session_state is not None:
+                    self.mqtt.handle_session_control(session_state)
+                    
+            except Exception as e:
+                print(f"Blynk polling error: {e}")
+            
+            # Sleep for polling interval
+            time.sleep(ENV_DATA_POLL_INTERVAL)
+
+    def setup(self):
+        """Setup all components"""
+        # Load model
+        if not self.classifier.load_model():
+            print("✗ Critical error: Could not load model. Exiting.")
             return False
             
-    except Exception as e:
-        print(f"✗ Cannot connect to Blynk: {e}")
-        return False
-
-def send_session_to_blynk(session_active):
-    """Send session state to Blynk to control V7"""
-    try:
-        session_state = 1 if session_active else 0
-        url = f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&V7={session_state}"
-        response = requests.get(url, timeout=5)
+        # Connect MQTT
+        if not self.mqtt.connect():
+            print("⚠️ Warning: Could not connect to MQTT. Continuing with local mode.")
         
-        if response.status_code == 200:
-            state = "STARTED" if session_active else "ENDED"
-            print(f"✓ Session {state} sent to Blynk V7")
-            return True
-        else:
-            print(f"✗ Failed to send session state: {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"✗ Session control error: {e}")
-        return False
-
-def send_focus_to_blynk(posture, confidence):
-    """Send focus state to Blynk using correct pin mapping: V0=Distracted, V1=Away, V2=Focused"""
-    posture_map = {
-        "Focus": 2,      # V2 = Focused
-        "Distracted": 0, # V0 = Distracted 
-        "Away": 1        # V1 = Away
-    }
-    
-    blynk_pin = posture_map.get(posture)
-    if blynk_pin is not None:
-        try:
-            # Reset all focus pins to 0 first
-            for pin in [0, 1, 2]:
-                reset_url = f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&V{pin}=0"
-                try:
-                    requests.get(reset_url, timeout=2)
-                except:
-                    pass
-            
-            # Set the current posture pin to 1
-            url = f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&V{blynk_pin}=1"
-            response = requests.get(url, timeout=5)
-            
-            if response.status_code == 200:
-                print(f"✓ Sent {posture} to Blynk V{blynk_pin} (Confidence: {confidence:.2f})")
-                return True
-            else:
-                print(f"✗ Blynk API error: {response.status_code}")
+        # Initialize camera
+        self.cap = cv2.VideoCapture(0)  # Use 0 for default camera
+        if self.cap.isOpened():
+            # Reduce resolution to lower CPU load
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # instead of 1280
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # instead of 720
+            print("✓ Camera initialized with reduced resolution")
+        
+        if not self.cap.isOpened():
+            print("✗ Could not open camera. Trying other indices...")
+            # Try other common camera indices
+            for i in range(1, 4):
+                self.cap = cv2.VideoCapture(i)
+                if self.cap.isOpened():
+                    print(f"✓ Camera found at index {i}")
+                    break
+            if not self.cap.isOpened():
+                print("✗ Critical error: No camera available. Exiting.")
                 return False
                 
-        except Exception as e:
-            print(f"✗ Failed to send {posture}: {e}")
-            return False
-    return False
-
-def send_to_both_systems(posture, confidence, mqtt_manager, session_active):
-    """Send focus state to both Blynk and MQTT"""
-    # Send to Blynk
-    blynk_success = send_focus_to_blynk(posture, confidence)
-    
-    # Send to MQTT
-    mqtt_success = mqtt_manager.publish_focus_state(posture, confidence)
-    
-    # Send alerts for specific states with high confidence
-    if posture == "Distracted" and confidence > 0.7:
-        mqtt_manager.publish_alert("distracted", "User appears distracted", confidence)
-        print("🚨 DISTRACTED ALERT: User needs to focus!")
+        self.running = True
+        return True
         
-    elif posture == "Away" and confidence > 0.7:
-        mqtt_manager.publish_alert("away", "User is away from desk", confidence)
-        print("⚠️ AWAY ALERT: User is not at the desk")
-        
-    elif posture == "Focus" and confidence > 0.8 and session_active:
-        mqtt_manager.publish_alert("focus_restored", "User is focused", confidence)
-        print("✓ FOCUS: User is studying effectively")
-    
-    return blynk_success or mqtt_success  # Success if either works
-# ========== MAIN APPLICATION ==========
-def main():
-    print("=" * 60)
-    print("AI Study Assistant - Complete Version with MQTT")
-    print("=" * 60)
-    
-    # Initialize MQTT Manager
-    mqtt_manager = MQTTManager()
-    mqtt_connected = mqtt_manager.connect()
-    
-    if not mqtt_connected:
-        print("⚠️  MQTT not available - continuing with Blynk only")
-    
-    # Test Blynk connection
-    blynk_connected = test_blynk_connection()
-    
-    if not blynk_connected and not mqtt_connected:
-        print("\n❌ No communication channels available!")
-        print("Troubleshooting steps:")
-        print("1. Check internet connection")
-        print("2. Verify Blynk Auth Token")
-        print("3. Check if MQTT broker is accessible")
-        return
-    
-    # Initialize pose classifier with Teachable Machine model
-    pose_classifier = PoseClassifier()
-    if not pose_classifier.load_model():
-        print("Failed to load model. Exiting...")
-        return
-    
-    # Start webcam
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        print("Error: Could not open webcam")
-        return
-    
-    # Set resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 20)
-    
-    print("\n🎯 AI Pose Detection Started!")
-    print("Using Teachable Machine Model for classification")
-    print("Press 'm' for MANUAL mode, 'a' for AUTO mode")
-    print("Press 's' to START session, 'e' to END session")
-    print("Press 'q' to QUIT")
-    
-    # Detection settings
-    auto_mode = True
-    last_detection_time = 0
-    detection_interval = 2.0
-    last_reported_posture = None
-    session_active = False
-    
-    # Performance monitoring
-    frame_count = 0
-    start_time = time.time()
-    
-    # Focus state tracking
-    focus_history = []
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Could not read frame")
-            break
-        
+    def poll_environmental_data(self):
+        """Poll Blynk for environmental data at regular intervals"""
         current_time = time.time()
-        
-        # Always classify posture for display (using Teachable Machine model)
-        posture, confidence = pose_classifier.classify_pose(frame)
-        
-        # Add to history for smoothing
-        focus_history.append((posture, confidence))
-        if len(focus_history) > 5:  # Keep last 5 readings
-            focus_history.pop(0)
-        
-        # Apply simple smoothing (majority vote with confidence)
-        if len(focus_history) >= 3:
-            posture_counts = {}
-            for p, c in focus_history:
-                if p not in posture_counts:
-                    posture_counts[p] = 0
-                posture_counts[p] += 1
-            
-            # Get most frequent posture
-            smoothed_posture = max(posture_counts, key=posture_counts.get)
-            
-            # Only use smoothed result if confidence is reasonable
-            recent_confidences = [c for p, c in focus_history if p == smoothed_posture]
-            avg_confidence = sum(recent_confidences) / len(recent_confidences) if recent_confidences else 0
-            
-            if avg_confidence > 0.6:
-                posture = smoothed_posture
-                confidence = avg_confidence
-        
-        # Auto detection mode
-        if auto_mode and current_time - last_detection_time > detection_interval:
-            print(f"AUTO MODE: {posture} (conf: {confidence:.2f})")
-            
-            # Send to both systems if posture changed and confidence is good
-            if posture != last_reported_posture and confidence > 0.6:
-                success = send_to_both_systems(posture, confidence, mqtt_manager)
-                if success:
-                    last_reported_posture = posture
-            
-            last_detection_time = current_time
-        
-        # Display results
-        display_frame = frame.copy()
-        
-        # Display mode and posture info
-        mode_text = "AUTO" if auto_mode else "MANUAL"
-        mode_color = (0, 255, 0) if auto_mode else (0, 165, 255)
-        cv2.putText(display_frame, f"Mode: {mode_text}", 
-                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
-        cv2.putText(display_frame, f"Posture: {posture} ({confidence:.2f})", 
-                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Show model type
-        model_type = "Teachable Machine" if pose_classifier.model is not None else "Fallback"
-        cv2.putText(display_frame, f"Model: {model_type}", 
-                   (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        # Show communication status
-        comm_status = []
-        if blynk_connected: comm_status.append("Blynk")
-        if mqtt_connected: comm_status.append("MQTT")
-        status_text = "Comms: " + "+".join(comm_status) if comm_status else "Comms: None"
-        cv2.putText(display_frame, status_text, 
-                   (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        # Show session status
-        session_text = f"Session: {'ACTIVE' if session_active else 'INACTIVE'}"
-        session_color = (0, 255, 0) if session_active else (0, 0, 255)
-        cv2.putText(display_frame, session_text, 
-                   (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, session_color, 2)
-        
-        # Display FPS
-        frame_count += 1
-        if frame_count >= 30:
-            fps = frame_count / (current_time - start_time)
-            cv2.putText(display_frame, f"FPS: {fps:.1f}", 
-                       (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            frame_count = 0
-            start_time = current_time
-        
-        # Display instructions
-        instructions = "m=MODE a=AUTO s=START e=END q=QUIT"
-        cv2.putText(display_frame, instructions, 
-                   (10, display_frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        cv2.imshow('AI Study Assistant - Complete Version', display_frame)
-        
-        # Handle key presses
-        key = cv2.waitKey(1) & 0xFF
-        
-        if key == ord('m'):
-            auto_mode = not auto_mode
-            mode_text = "AUTO" if auto_mode else "MANUAL"
-            print(f"Switched to {mode_text} mode")
-            
-        elif key == ord('a') and not auto_mode:
-            # Manual detection trigger
-            posture, confidence = pose_classifier.classify_pose(frame)
-            print(f"Manual detection: {posture} (confidence: {confidence:.2f})")
-            if confidence > 0.6:
-                send_to_both_systems(posture, confidence, mqtt_manager)
-                last_reported_posture = posture
-                
-        elif key == ord('s'):
-            # Start session - update both Python and Blynk
-            if not session_active:
-                session_active = True
-                mqtt_manager.start_session()
-                send_session_to_blynk(True)  # Send to Blynk
-                print("🎯 Study session STARTED")
-                
-        elif key == ord('e'):
-            # End session - update both Python and Blynk
-            if session_active:
-                session_active = False
-                mqtt_manager.end_session()
-                send_session_to_blynk(False)  # Send to Blynk
-                print("⏹️ Study session ENDED")
-                
-        elif not auto_mode:
-            # Manual posture overrides
-            if key == ord('f'):
-                success = send_to_both_systems("Focus", 1.0, mqtt_manager)
-                if success:
-                    last_reported_posture = "Focus"
-            elif key == ord('d'):
-                success = send_to_both_systems("Distracted", 1.0, mqtt_manager)
-                if success:
-                    last_reported_posture = "Distracted"
-            elif key == ord('w'):
-                success = send_to_both_systems("Away", 1.0, mqtt_manager)
-                if success:
-                    last_reported_posture = "Away"
-                
-        if key == ord('q'):
-            print("Quitting...")
-            if session_active:
-                mqtt_manager.end_session()
-            break
+        if current_time - self.last_env_poll_time >= ENV_DATA_POLL_INTERVAL:
+            temperature, humidity, light_level = self.mqtt.get_blynk_environmental_data()
+            if temperature is not None and humidity is not None and light_level is not None:
+                self.mqtt.publish_environmental_data(temperature, humidity, light_level)
+            self.last_env_poll_time = current_time
 
-        if auto_mode and current_time - last_detection_time > detection_interval:
-            print(f"AUTO MODE: {posture} (conf: {confidence:.2f})")
-            
-            # Send to both systems if posture changed and confidence is good
-            if posture != last_reported_posture and confidence > 0.6:
-                success = send_to_both_systems(posture, confidence, mqtt_manager, session_active)
-                if success:
-                    last_reported_posture = posture
-            
-            last_detection_time = current_time
-            
-        # Cleanup
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    # Safe MQTT disconnect
-    if mqtt_connected:
-        mqtt_manager.disconnect()
-    
-    print("Webcam released and cleanup complete")
+    def poll_session_control(self):
+        """Poll Blynk for session control (V7) at regular intervals"""
+        current_time = time.time()
+        if current_time - self.last_session_poll_time >= ENV_DATA_POLL_INTERVAL:
+            session_state = self.mqtt.get_blynk_session_control()
+            if session_state is not None:
+                self.mqtt.handle_session_control(session_state)
+            self.last_session_poll_time = current_time
+        
+    def run(self):
+        """Main loop"""
+        if not self.running:
+            if not self.setup():
+                return
+                
+        print("\nStarting main loop. Press 'q' to quit.")
+        
+        # START BLYNK POLLING THREAD (ADD THIS)
+        self.stop_blynk_thread = False
+        self.blynk_thread = threading.Thread(target=self.start_blynk_polling)
+        self.blynk_thread.daemon = True
+        self.blynk_thread.start()
+        
+        prediction_counter = 0
+        PREDICTION_INTERVAL = 3  # Only predict every 3 frames
+        
+        try:
+            while self.running:
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("✗ Could not read frame from camera")
+                    time.sleep(1)
+                    continue
+                
+                # Get prediction
+                prediction_counter += 1
+                if prediction_counter % PREDICTION_INTERVAL == 0:
+                    class_name, confidence = self.classifier.predict(frame)
+                    prediction_counter = 0
 
+                    if class_name:
+                        # Store last state for display
+                        self.last_class_name = class_name
+                        self.last_confidence = confidence
+                        
+                        # Display on frame
+                        cv2.putText(frame, 
+                                    f"{class_name}: {confidence:.2f}", 
+                                    (10, 30), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 
+                                    1, (0, 255, 0), 2)
+                        
+                        # Publish to MQTT if connected
+                        self.mqtt.publish_focus_state(class_name, confidence)
+                        
+                        # Trigger alerts for low focus states (only if session is active)
+                        if self.mqtt.session_active and ("Distracted" in class_name or class_name == "Away"):
+                            if confidence > 0.7:
+                                self.mqtt.publish_alert("focus_loss", f"Detected {class_name}", confidence)
+                else:
+                    if hasattr(self, 'last_class_name'):
+                        cv2.putText(frame, f"{self.last_class_name}: {self.last_confidence:.2f}", (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                try:
+                    cv2.imshow('Study Assistant - Press Q to Exit', frame)
+                except Exception as e:
+                    print(f"OpenCV display error: {e}")
+                    break
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:  # Q or ESC key
+                    self.running = False
+                
+                time.sleep(0.1)  # ~10 FPS
+                
+        except KeyboardInterrupt:
+            print("\nReceived keyboard interrupt")
+        finally:
+            self.cleanup()
+            
+    def cleanup(self):
+        """Clean up resources"""
+        print("\nCleaning up...")
+        self.running = False
+        self.stop_blynk_thread = True  # Stop the thread
+        
+        # Wait for thread to finish (ADD THIS)
+        if self.blynk_thread and self.blynk_thread.is_alive():
+            self.blynk_thread.join(timeout=2.0)
+        
+        if self.cap:
+            self.cap.release()
+        cv2.destroyAllWindows()
+        if self.mqtt.session_active:
+            self.mqtt.end_session()
+        self.mqtt.disconnect()
+        print("✓ Cleanup complete")
+
+# ========== RUN APPLICATION ==========
 if __name__ == "__main__":
-    main()
+    app = StudyAssistantApp()
+    app.run()

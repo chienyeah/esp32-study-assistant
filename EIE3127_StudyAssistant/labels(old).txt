@@ -1,0 +1,4 @@
+0 Focus
+1 Distracted
+2 Away
+3 Distracted - Phone
