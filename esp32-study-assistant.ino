@@ -8,6 +8,7 @@
 #include "secrets.h"
 #include <BlynkSimpleEsp32.h>
 #include <WiFi.h>
+#include <PubSubClient.h>
 #include "env_monitor.h"
 
 // --------- Pin Definitions ----------
@@ -35,22 +36,38 @@
 #define V7 7  // Session control
 #define V8 8  // Focus ratio
 
+// MQTT Configuration
+#define MQTT_BROKER "broker.hivemq.com"
+#define MQTT_PORT 1883
+#define MQTT_TOPIC_TEMP "studyassistant/env/temperature"
+#define MQTT_TOPIC_HUMID "studyassistant/env/humidity"
+#define MQTT_TOPIC_LIGHT "studyassistant/env/light"
+
 // Create the monitor
 EnvMonitor env(PIN_DHT, PIN_LDR_AO,
                LEDA_R, LEDA_Y, LEDA_G,
                LEDB_R, LEDB_Y, LEDB_G, PIN_BUZZER,
                PIN_I2C_SDA, PIN_I2C_SCL);
 
+// WiFi and MQTT clients
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
 // Session tracking
 bool sessionActive = false;
 unsigned long sessionStartTime = 0;
 unsigned long focusTime = 0;
 bool blynkConnected = false;
+bool mqttConnected = false;
 
 // Focus state tracking
 String currentFocusState = "UNKNOWN";
 unsigned long lastFocusUpdate = 0;
 const unsigned long FOCUS_TIMEOUT = 10000;
+
+// Environment data publishing
+unsigned long lastMqttPublish = 0;
+const unsigned long MQTT_PUBLISH_INTERVAL = 10000; // 10 seconds
 
 void setup() {
   Serial.begin(115200);
@@ -63,9 +80,10 @@ void setup() {
   env.begin();
   Serial.println("Environment monitor initialized");
 
-  // Initialize WiFi and Blynk
+  // Initialize WiFi, Blynk and MQTT
   setupWiFi();
   setupBlynk();
+  setupMQTT();
   
   Serial.println("=== Setup Complete ===");
   Serial.println("Commands: STATUS, START, STOP, FOCUSED, DISTRACTED, AWAY, SYNC, RESET");
@@ -133,6 +151,150 @@ void setupBlynk() {
   }
 }
 
+void setupMQTT() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Skipping MQTT - No WiFi");
+    return;
+  }
+  
+  Serial.println("Setting up MQTT...");
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  
+  connectMQTT();
+}
+
+void connectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Cannot connect MQTT - No WiFi");
+    return;
+  }
+  
+  Serial.print("Connecting to MQTT...");
+  
+  // Generate unique client ID
+  String clientId = "StudyAssistant-";
+  clientId += String(random(0xffff), HEX);
+  
+  unsigned long mqttStart = millis();
+  while (!mqttClient.connect(clientId.c_str()) && millis() - mqttStart < 10000) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  if (mqttClient.connected()) {
+    mqttConnected = true;
+    Serial.println("✓ MQTT Connected!");
+    
+    // Subscribe to topics
+    mqttClient.subscribe("studyassistant/focus/state");
+    mqttClient.subscribe("studyassistant/focus/confidence");
+    mqttClient.subscribe("studyassistant/alert/trigger");
+    mqttClient.subscribe("studyassistant/session/events");
+    
+    Serial.println("✓ MQTT Subscriptions active");
+    
+  } else {
+    mqttConnected = false;
+    Serial.println("✗ MQTT Failed - Will retry");
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // Convert payload to String
+  String message;
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  Serial.printf("MQTT Received [%s]: %s\n", topic, message.c_str());
+  
+  // Handle different topics
+  if (String(topic) == "studyassistant/focus/state") {
+    handleFocusStateMessage(message);
+  } else if (String(topic) == "studyassistant/alert/trigger") {
+    handleAlertMessage(message);
+  } else if (String(topic) == "studyassistant/session/events") {
+    handleSessionMessage(message);
+  }
+}
+
+void handleFocusStateMessage(String message) {
+  using DM = EnvMonitor::DetMode;
+  
+  if (message == "FOCUSED") {
+    env.setDetectionMode(DM::DET_FOCUSED);
+    currentFocusState = "FOCUSED";
+    lastFocusUpdate = millis();
+    Serial.println("MQTT: FOCUSED");
+    if (blynkConnected) updateBlynkFocusState("FOCUSED");
+  } else if (message == "DISTRACTED") {
+    env.setDetectionMode(DM::DET_DISTRACTED);
+    currentFocusState = "DISTRACTED";
+    lastFocusUpdate = millis();
+    Serial.println("MQTT: DISTRACTED");
+    if (blynkConnected) updateBlynkFocusState("DISTRACTED");
+  } else if (message == "AWAY") {
+    env.setDetectionMode(DM::DET_AWAY);
+    currentFocusState = "AWAY";
+    lastFocusUpdate = millis();
+    Serial.println("MQTT: AWAY");
+    if (blynkConnected) updateBlynkFocusState("AWAY");
+  }
+}
+
+void handleAlertMessage(String message) {
+  // Handle alert triggers from MQTT
+  if (message == "BUZZER_ON") {
+    digitalWrite(PIN_BUZZER, HIGH);
+    Serial.println("MQTT Alert: Buzzer ON");
+  } else if (message == "BUZZER_OFF") {
+    digitalWrite(PIN_BUZZER, LOW);
+    Serial.println("MQTT Alert: Buzzer OFF");
+  }
+}
+
+void handleSessionMessage(String message) {
+  if (message == "SESSION_START" && !sessionActive) {
+    sessionStartTime = millis();
+    focusTime = 0;
+    sessionActive = true;
+    if (blynkConnected) Blynk.virtualWrite(V8, 0);
+    Serial.println("🎯 Session STARTED from MQTT");
+  } else if (message == "SESSION_STOP" && sessionActive) {
+    sessionActive = false;
+    unsigned long totalTime = (millis() - sessionStartTime) / 1000;
+    float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
+    if (blynkConnected) Blynk.virtualWrite(V8, focusRatio * 100);
+    Serial.printf("⏹️ Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
+  }
+}
+
+void publishEnvironmentData() {
+  if (!mqttConnected) return;
+  
+  auto readings = env.get();
+  
+  // Publish temperature
+  if (!isnan(readings.tempC)) {
+    String tempStr = String(readings.tempC, 1);
+    mqttClient.publish(MQTT_TOPIC_TEMP, tempStr.c_str());
+    Serial.printf("MQTT Published: %s = %s°C\n", MQTT_TOPIC_TEMP, tempStr.c_str());
+  }
+  
+  // Publish humidity
+  if (readings.humi >= 0) {
+    String humidStr = String(readings.humi);
+    mqttClient.publish(MQTT_TOPIC_HUMID, humidStr.c_str());
+    Serial.printf("MQTT Published: %s = %s%%\n", MQTT_TOPIC_HUMID, humidStr.c_str());
+  }
+  
+  // Publish light level
+  String lightStr = String(readings.lightPct);
+  mqttClient.publish(MQTT_TOPIC_LIGHT, lightStr.c_str());
+  Serial.printf("MQTT Published: %s = %s%%\n", MQTT_TOPIC_LIGHT, lightStr.c_str());
+}
+
 void loop() {
   static unsigned long lastReconnectAttempt = 0;
   static unsigned long lastStatusCheck = 0;
@@ -144,15 +306,18 @@ void loop() {
   // Handle Blynk connection
   handleBlynkConnection();
   
+  // Handle MQTT connection
+  handleMQTTConnection();
+  
   // Update session metrics
   updateSessionMetrics();
 
   updateFocusTimeTracking();
   
-  // Send environment data to Blynk every 10 seconds
-  if (millis() - lastBlynkUpdate > 10000 && blynkConnected) {
-    sendEnvironmentToBlynk();
-    lastBlynkUpdate = millis();
+  // Send environment data to MQTT every 10 seconds (instead of Blynk)
+  if (millis() - lastMqttPublish > MQTT_PUBLISH_INTERVAL) {
+    publishEnvironmentData();
+    lastMqttPublish = millis();
   }
   
   // Check for focus state timeout
@@ -192,6 +357,16 @@ void handleBlynkConnection() {
   }
 }
 
+void handleMQTTConnection() {
+  if (!mqttConnected && WiFi.status() == WL_CONNECTED) {
+    connectMQTT();
+  }
+  
+  if (mqttConnected) {
+    mqttClient.loop();
+  }
+}
+
 void updateSessionMetrics() {
   if (!sessionActive) return;
   
@@ -206,19 +381,7 @@ void updateSessionMetrics() {
   }
 }
 
-void sendEnvironmentToBlynk() {
-  if (!blynkConnected) return;
-  
-  auto readings = env.get();
-  
-  if (!isnan(readings.tempC)) {
-    Blynk.virtualWrite(V4, readings.tempC);
-  }
-  if (readings.humi >= 0) {
-    Blynk.virtualWrite(V5, readings.humi);
-  }
-  Blynk.virtualWrite(V6, readings.lightPct);
-}
+// REMOVED: sendEnvironmentToBlynk() function since we're using MQTT now
 
 void updateBlynkFocusState(String state) {
   if (!blynkConnected) return;
@@ -293,13 +456,18 @@ BLYNK_WRITE(V2) {
 void updateFocusTimeTracking() {
   static unsigned long lastFocusCheck = 0;
   static String previousFocusState = "UNKNOWN";
+  static unsigned long lastFocusLog = 0;
   
   if (millis() - lastFocusCheck > 1000) { // Check every second
     if (sessionActive) {
       // Only count time when actually in FOCUSED state
       if (currentFocusState == "FOCUSED") {
         focusTime++;
-        Serial.printf("Focus time: %lu seconds\n", focusTime);
+        // Only log focus time every 30 seconds to reduce serial output
+        if (millis() - lastFocusLog > 30000) {
+          Serial.printf("Focus time: %lu seconds\n", focusTime);
+          lastFocusLog = millis();
+        }
       }
     }
     lastFocusCheck = millis();
@@ -317,6 +485,12 @@ BLYNK_WRITE(V7) {
     sessionActive = true;
     Blynk.virtualWrite(V8, 0);
     Serial.println("🎯 Session STARTED from Blynk");
+    
+    // Publish to MQTT
+    if (mqttConnected) {
+      mqttClient.publish("studyassistant/session/events", "SESSION_START");
+      Serial.println("MQTT: Published SESSION_START to studyassistant/session/events");
+    }
   } 
   else if (sessionState == 0 && sessionActive) {
     sessionActive = false;
@@ -324,6 +498,12 @@ BLYNK_WRITE(V7) {
     float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
     Blynk.virtualWrite(V8, focusRatio * 100);
     Serial.printf("⏹️ Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
+    
+    // Publish to MQTT
+    if (mqttConnected) {
+      mqttClient.publish("studyassistant/session/events", "SESSION_STOP");
+      Serial.println("MQTT: Published SESSION_STOP to studyassistant/session/events");
+    }
   }
 }
 
@@ -343,6 +523,11 @@ void handleSerialCommand() {
       focusTime = 0;
       sessionActive = true;
       Serial.println("Session STARTED (manual)");
+      // Publish to MQTT
+      if (mqttConnected) {
+        mqttClient.publish("studyassistant/session/events", "SESSION_START");
+        Serial.println("MQTT: Published SESSION_START to studyassistant/session/events");
+      }
     }
   } else if (command == "STOP") {
     if (blynkConnected) {
@@ -353,6 +538,11 @@ void handleSerialCommand() {
       Serial.printf("⏹️ Session ENDED - Focus: %lus/%lus (%.1f%%)\n", 
                    focusTime, totalTime, focusRatio * 100);
       sessionActive = false;
+      // Publish to MQTT
+      if (mqttConnected) {
+        mqttClient.publish("studyassistant/session/events", "SESSION_STOP");
+        Serial.println("MQTT: Published SESSION_STOP to studyassistant/session/events");
+      }
     }
   } else if (command == "FOCUSED") {
     env.setDetectionMode(DM::DET_FOCUSED);
@@ -375,10 +565,12 @@ void handleSerialCommand() {
   } else if (command == "SYNC") {
     if (blynkConnected) {
       Blynk.syncVirtual(V0, V1, V2, V7);
-      sendEnvironmentToBlynk();
       updateBlynkFocusState(currentFocusState);
       Serial.println("Blynk sync completed");
     }
+    // Also publish current environment data to MQTT
+    publishEnvironmentData();
+    Serial.println("MQTT data published");
   } else if (command == "RESET") {
     Serial.println("Resetting...");
     ESP.restart();
@@ -388,9 +580,10 @@ void handleSerialCommand() {
 void printQuickStatus() {
   auto readings = env.get();
   
-  Serial.printf("[Status] WiFi:%s Blynk:%s Session:%s Focus:%s\n", 
+  Serial.printf("[Status] WiFi:%s Blynk:%s MQTT:%s Session:%s Focus:%s\n", 
                 WiFi.status() == WL_CONNECTED ? "ON" : "OFF",
                 blynkConnected ? "ON" : "OFF",
+                mqttConnected ? "ON" : "OFF",
                 sessionActive ? "ACTIVE" : "INACTIVE",
                 currentFocusState.c_str());
 }
@@ -401,6 +594,7 @@ void printStatus() {
   Serial.println("\n=== System Status ===");
   Serial.printf("WiFi: %s\n", WiFi.status() == WL_CONNECTED ? "CONNECTED" : "DISCONNECTED");
   Serial.printf("Blynk: %s\n", blynkConnected ? "CONNECTED" : "DISCONNECTED");
+  Serial.printf("MQTT: %s\n", mqttConnected ? "CONNECTED" : "DISCONNECTED");
   Serial.printf("Session: %s\n", sessionActive ? "ACTIVE" : "INACTIVE");
   Serial.printf("Focus State: %s\n", currentFocusState.c_str());
   Serial.printf("Environment: %.1f°C, %d%%, %d%% light\n", 

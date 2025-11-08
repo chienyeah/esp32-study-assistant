@@ -26,6 +26,8 @@ void EnvMonitor::begin() {
 
   // Buzzer
   pinMode(m_buzzer, OUTPUT); digitalWrite(m_buzzer, LOW);
+  ledcAttach(m_buzzer, BUZZ_TONE_HZ, 8);   // set up PWM on this pin (auto channel), 8-bit res
+  ledcWriteTone(m_buzzer, 0);  
 
   // Sensors
   dht.begin();
@@ -138,7 +140,7 @@ void EnvMonitor::setDetectionMode(DetMode m) {
   digitalWrite(m_ledB_R, LOW);
   digitalWrite(m_ledB_Y, LOW);
   digitalWrite(m_ledB_G, LOW);
-  digitalWrite(m_buzzer, LOW);   // ensure silent by default
+  ledcWriteTone(m_buzzer, 0);   // ensure silent by default
 
   switch (m_detMode) {
     case DET_AWAY:
@@ -150,6 +152,7 @@ void EnvMonitor::setDetectionMode(DetMode m) {
       // Start with ON state immediately; blink handled in driveDetectionOutputs()
       m_blinkOn = true;
       digitalWrite(m_ledB_R, HIGH);
+      ledcWriteTone(m_buzzer, BUZZ_TONE_HZ);
       break;
 
     case DET_FOCUSED:
@@ -173,11 +176,11 @@ void EnvMonitor::driveDetectionOutputs() {
       m_blinkOn = !m_blinkOn;
 
       digitalWrite(m_ledB_R, m_blinkOn ? HIGH : LOW);
-      digitalWrite(m_buzzer, m_blinkOn ? HIGH : LOW); // play/stop buzzer
+      ledcWriteTone(m_buzzer, m_blinkOn ? BUZZ_TONE_HZ : 0); // play/stop buzzer
     }
   } else {
     // Other modes: make sure buzzer is off
-    digitalWrite(m_buzzer, LOW);
+    ledcWriteTone(m_buzzer, 0);
   }
 }
 

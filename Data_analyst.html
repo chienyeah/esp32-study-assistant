@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Study Assistant MQTT Analyzer</title>
-    <!-- Stable library versions -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
     <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
     <style>
@@ -33,7 +32,7 @@
             display: flex;
             border-bottom: 1px solid #dee2e6;
             margin-bottom: 20px;
-            overflow-x: auto; /* For mobile responsiveness */
+            overflow-x: auto;
         }
         .tab-btn {
             padding: 12px 24px;
@@ -45,7 +44,7 @@
             color: #6c757d;
             border-bottom: 3px solid transparent;
             transition: all 0.3s ease;
-            white-space: nowrap; /* Prevent tab text wrapping */
+            white-space: nowrap;
         }
         .tab-btn.active {
             color: #2196f3;
@@ -106,21 +105,8 @@
             margin: 20px 0;
         }
 
-        /* --- Log Styles --- */
-        .error-log {
-            background: #fff8f8;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-            color: #b71c1c;
-            font-family: 'Courier New', monospace;
-            height: 100px;
-            overflow-y: auto;
-            border: 1px solid #ffcdd2;
-            font-size: 0.9em;
-        }
         #message-log {
-            height: 400px; /* Taller for raw data tab */
+            height: 400px;
             overflow-y: scroll;
             border: 1px solid #e0e0e0;
             padding: 15px;
@@ -159,13 +145,41 @@
             background-color: #ef9a9a;
             cursor: not-allowed;
         }
+        #connect-blynk-btn {
+            background-color: #4caf50;
+            color: white;
+        }
+        #connect-blynk-btn:disabled {
+            background-color: #a5d6a7;
+            cursor: not-allowed;
+        }
+        #disconnect-blynk-btn {
+            background-color: #ff9800;
+            color: white;
+        }
+        #disconnect-blynk-btn:disabled {
+            background-color: #ffcc80;
+            cursor: not-allowed;
+        }
 
         /* --- Broker Status --- */
-        #broker-status {
+        .status-indicator {
             font-weight: 600;
             padding: 3px 8px;
             border-radius: 4px;
             background-color: #e0e0e0;
+        }
+        .status-connected {
+            background-color: #a5d6a7;
+            color: #2e7d32;
+        }
+        .status-error {
+            background-color: #ffcdd2;
+            color: #c62828;
+        }
+        .status-disconnected {
+            background-color: #e0e0e0;
+            color: #616161;
         }
 
         /* --- Alert Notification Styles --- */
@@ -256,13 +270,13 @@
         /* --- Responsive Adjustments --- */
         @media (max-width: 768px) {
             .status-grid {
-                grid-template-columns: 1fr; /* Stack status boxes on mobile */
+                grid-template-columns: 1fr;
             }
             .chart-container {
-                height: 250px; /* Shorter charts on mobile */
+                height: 250px;
             }
             #message-log {
-                height: 300px; /* Shorter raw data log on mobile */
+                height: 300px;
             }
             .alert-notification {
                 top: 10px;
@@ -368,27 +382,6 @@
             font-weight: bold;
             color: #1976d2;
         }
-        
-        /* Confidence indicator */
-        .confidence-indicator {
-            height: 10px;
-            background: linear-gradient(to right, #f44336, #ff9800, #4caf50);
-            border-radius: 5px;
-            margin-top: 5px;
-            position: relative;
-        }
-        
-        .confidence-marker {
-            position: absolute;
-            top: -5px;
-            width: 20px;
-            height: 20px;
-            background: white;
-            border: 2px solid #333;
-            border-radius: 50%;
-            transform: translateX(-50%);
-            transition: left 0.5s ease;
-        }
 
         .session-actions {
             display: flex;
@@ -427,6 +420,22 @@
             padding: 2px 6px;
             font-size: 1em;
         }
+
+        .switch-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .switch-on {
+            background-color: #4caf50;
+        }
+        
+        .switch-off {
+            background-color: #f44336;
+        }
     </style>
 </head>
 <body>
@@ -445,14 +454,13 @@
         <div id="main-tab" class="tab-content active">
             <div class="card">
                 <h2>Connection Status</h2>
-                <p>MQTT Broker: <span id="broker-status">Disconnected</span></p>
+                <p>MQTT Broker: <span id="broker-status" class="status-indicator status-disconnected">Disconnected</span></p>
+                <p>Blynk Cloud: <span id="blynk-status" class="status-indicator status-disconnected">Disconnected</span></p>
                 <div class="conn-buttons">
                     <button id="connect-btn" class="conn-btn" onclick="connect()">Connect to MQTT</button>
                     <button id="disconnect-btn" class="conn-btn" onclick="disconnect()" disabled>Disconnect</button>
-                </div>
-                <!-- Debug Error Log -->
-                <div class="error-log" id="error-log">
-                    [Debug] App loaded - Click "Connect to MQTT" to start
+                    <button id="connect-blynk-btn" class="conn-btn" onclick="connectToBlynk()">Connect to Blynk</button>
+                    <button id="disconnect-blynk-btn" class="conn-btn" onclick="disconnectBlynk()" disabled>Disconnect Blynk</button>
                 </div>
             </div>
 
@@ -497,7 +505,7 @@
 
             <div class="card">
                 <h2>Connection Info</h2>
-                <p><strong>Broker URL:</strong> wss://broker.hivemq.com:8884/mqtt</p>
+                <p><strong>Broker URL:</strong> ws://broker.hivemq.com:8000/mqtt</p>
                 <p><strong>Subscribed Topics:</strong></p>
                 <ul>
                     <li>studyassistant/focus/state</li>
@@ -578,9 +586,9 @@
     </div>
 
     <script>
-        // ✅ PROVEN WORKING MQTT CONFIGURATION
+        // MQTT CONFIGURATION
         const MQTT_CONFIG = {
-            url: "wss://broker.hivemq.com:8884/mqtt",
+            url: "ws://broker.hivemq.com:8000/mqtt",
             topics: {
                 focusState: "studyassistant/focus/state",
                 focusConfidence: "studyassistant/focus/confidence",
@@ -592,26 +600,48 @@
             }
         };
 
+        // BLYNK CONFIGURATION
+        const BLYNK_CONFIG = {
+            server: "blynk.cloud",
+            port: 8080,
+            authToken: "gLNztcV4mo_QL8rNxhRCyRDEZQ1JRO7H",
+            templateId: "TMPL6Aa3qBmmY",
+            templateName: "StudyAssistant",
+            virtualPins: {
+                distracted: "0",
+                away: "1",
+                focus: "2",
+                temperature: "4",
+                humidity: "5",
+                lightLevel: "6",
+                sessionControl: "7",
+                focusRate: "8"
+            }
+        };
+
         // Global State
         let mqttClient;
+        let blynkClient;
         const STATE_LIMIT = 30;
         let stateData = {
             timestamps: [],
-            states: [], // 0=Unknown, 1=Focus, 2=Distracted, 3=Away
-            confidences: [], // 0-100%
-            temperatures: [], // °C
-            humidities: [], // %
-            lightLevels: [] // %
+            states: [],
+            confidences: [],
+            temperatures: [],
+            humidities: [],
+            lightLevels: []
         };
-        // Charts (separate for tabs)
+        // Charts
         let detailedStateChart, stateDistributionChart, environmentChart, detailedEnvironmentChart;
 
         // DOM Elements
         const DOM = {
             connectBtn: document.getElementById('connect-btn'),
             disconnectBtn: document.getElementById('disconnect-btn'),
+            connectBlynkBtn: document.getElementById('connect-blynk-btn'),
+            disconnectBlynkBtn: document.getElementById('disconnect-blynk-btn'),
             brokerStatus: document.getElementById('broker-status'),
-            errorLog: document.getElementById('error-log'),
+            blynkStatus: document.getElementById('blynk-status'),
             stateValue: document.getElementById('state-value'),
             sessionValue: document.getElementById('session-value'),
             currentStateBox: document.getElementById('current-state'),
@@ -637,11 +667,9 @@
 
         // --- Tab Switching Logic ---
         function switchTab(tabId) {
-            // Update tab buttons
             DOM.tabBtns.forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');
 
-            // Update tab content
             DOM.tabContents.forEach(content => content.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
 
@@ -650,21 +678,34 @@
                 if (detailedStateChart) detailedStateChart.update();
                 if (stateDistributionChart) stateDistributionChart.update();
             } else if (tabId === 'sessions-tab') {
-                renderSessionList(); // Refresh session list when tab is active
+                renderSessionList();
             }
         }
 
-        // --- Debug Logging ---
-        function logDebug(message) {
-            const now = new Date().toLocaleTimeString();
-            const logEntry = `[${now}] ${message}`;
-            
-            DOM.errorLog.innerHTML += `${logEntry}\n`;
-            DOM.errorLog.scrollTop = DOM.errorLog.scrollHeight;
-            console.log(`[MQTT Analyzer] ${logEntry}`);
+        // --- Update Blynk Value Display ---
+        function updateBlynkValueDisplay(pin, value) {
+            const element = DOM[`blynkV${pin}Value`];
+            if (element) {
+                // For switch values, show ON/OFF with colored indicator
+                if (pin === '0' || pin === '1' || pin === '2' || pin === '7') {
+                    const isOn = value == 1;
+                    element.innerHTML = `
+                        <span class="switch-status ${isOn ? 'switch-on' : 'switch-off'}"></span>
+                        ${isOn ? 'ON' : 'OFF'}
+                    `;
+                } else {
+                    element.textContent = value;
+                }
+                
+                // Highlight recent updates
+                element.style.backgroundColor = '#e8f5e8';
+                setTimeout(() => {
+                    element.style.backgroundColor = '';
+                }, 1000);
+            }
         }
 
-        // --- Show Alert Notification (Non-intrusive) ---
+        // --- Show Alert Notification ---
         function showAlertNotification(alertData) {
             const notification = document.createElement('div');
             notification.className = 'alert-notification';
@@ -673,7 +714,6 @@
             const message = alertData.message || 'No message';
             const confidence = alertData.confidence ? (alertData.confidence * 100).toFixed(1) : 'N/A';
             
-            // Set notification style based on alert type
             if (alertType.includes('focus_loss') || alertType.includes('Distracted') || alertType.includes('Away')) {
                 notification.classList.add('warning');
             } else if (alertType.includes('session')) {
@@ -691,15 +731,12 @@
             
             document.body.appendChild(notification);
             
-            // Auto-remove after 8 seconds
             setTimeout(() => {
                 if (notification.parentElement) {
                     notification.style.animation = 'slideOutRight 0.3s ease';
                     setTimeout(() => notification.remove(), 300);
                 }
             }, 8000);
-            
-            logDebug(`Alert: ${alertType} - ${message}`);
         }
 
         // --- Initialize All Charts ---
@@ -806,14 +843,14 @@
                     }
                 });
 
-                // 4. State Distribution Chart (Analysis Tab)
+                // 3. State Distribution Chart (Analysis Tab)
                 const distCtx = document.getElementById('stateDistributionChart').getContext('2d');
                 stateDistributionChart = new Chart(distCtx, {
                     type: 'doughnut',
                     data: {
                         labels: ["Focus", "Distracted", "Away", "Unknown"],
                         datasets: [{
-                            data: [0, 0, 0, 0], // Initial values
+                            data: [0, 0, 0, 0],
                             backgroundColor: ['#2e7d32', '#c62828', '#ef6c00', '#616161'],
                             borderWidth: 1
                         }]
@@ -828,7 +865,7 @@
                     }
                 });
 
-                // 5. Detailed Environmental Chart (Analysis Tab)
+                // 4. Detailed Environmental Chart (Analysis Tab)
                 const detailedEnvCtx = document.getElementById('detailedEnvironmentChart').getContext('2d');
                 detailedEnvironmentChart = new Chart(detailedEnvCtx, {
                     type: 'line',
@@ -885,10 +922,8 @@
                         }
                     }
                 });
-
-                logDebug("All charts initialized successfully");
             } catch (error) {
-                logDebug(`Chart initialization failed: ${error.message}`);
+                console.error('Chart initialization failed:', error);
             }
         }
 
@@ -896,11 +931,9 @@
         function updateStateDistribution() {
             if (!stateDistributionChart) return;
 
-            // Count state occurrences
             const counts = { 0: 0, 1: 0, 2: 0, 3: 0 };
             stateData.states.forEach(state => counts[state]++);
 
-            // Update chart data
             stateDistributionChart.data.datasets[0].data = [
                 counts[1], // Focus
                 counts[2], // Distracted
@@ -914,7 +947,6 @@
         function connect() {
             try {
                 DOM.connectBtn.disabled = true;
-                logDebug(`Connecting to ${MQTT_CONFIG.url}...`);
 
                 const clientId = `study_analyzer_${Math.random().toString(16).slice(2, 12)}`;
 
@@ -925,50 +957,40 @@
                     rejectUnauthorized: false
                 });
 
-                // Connection Success
                 mqttClient.on('connect', () => {
                     DOM.brokerStatus.textContent = 'Connected';
-                    DOM.brokerStatus.style.backgroundColor = '#a5d6a7';
-                    DOM.brokerStatus.style.color = '#2e7d32';
+                    DOM.brokerStatus.className = 'status-indicator status-connected';
                     DOM.disconnectBtn.disabled = false;
-                    logDebug("✅ Connected to MQTT broker!");
 
-                    // Subscribe to topics
                     const topics = Object.values(MQTT_CONFIG.topics);
                     mqttClient.subscribe(topics, (err) => {
-                        if (err) logDebug(`❌ Subscription failed: ${err.message}`);
-                        else logDebug(`✅ Subscribed to topics: ${topics.join(', ')}`);
+                        if (err) console.error('Subscription failed:', err);
                     });
                 });
 
-                // Connection Error
                 mqttClient.on('error', (err) => {
-                    logDebug(`❌ MQTT Error: ${err.message}`);
+                    console.error('MQTT Error:', err);
                     DOM.brokerStatus.textContent = `Error: ${err.message.split(':')[0]}`;
-                    DOM.brokerStatus.style.backgroundColor = '#ffcdd2';
-                    DOM.brokerStatus.style.color = '#c62828';
+                    DOM.brokerStatus.className = 'status-indicator status-error';
                     DOM.connectBtn.disabled = false;
                 });
 
-                // Connection Closed
                 mqttClient.on('close', () => {
-                    logDebug("🔌 Disconnected from MQTT broker");
                     DOM.brokerStatus.textContent = 'Disconnected';
-                    DOM.brokerStatus.style.backgroundColor = '#e0e0e0';
-                    DOM.brokerStatus.style.color = '#616161';
+                    DOM.brokerStatus.className = 'status-indicator status-disconnected';
                     DOM.connectBtn.disabled = false;
                     DOM.disconnectBtn.disabled = true;
                 });
 
-                // Message Received
                 mqttClient.on('message', (topic, message) => {
                     const payload = message.toString().trim();
                     const timestamp = new Date().toLocaleTimeString();
 
-                    // Log raw message
+                    // Debug logging
+                    console.log(`MQTT Message - Topic: ${topic}, Payload: ${payload}`);
+                    
                     logRawMessage(topic, payload, timestamp);
 
-                    // Process data
                     switch (topic) {
                         case MQTT_CONFIG.topics.focusState:
                             handleFocusState(payload);
@@ -977,6 +999,7 @@
                             handleFocusConfidence(parseFloat(payload));
                             break;
                         case MQTT_CONFIG.topics.session:
+                            console.log("Processing session message:", payload); // Debug
                             handleSessionData(payload);
                             break;
                         case MQTT_CONFIG.topics.alert:
@@ -995,7 +1018,7 @@
                 });
 
             } catch (error) {
-                logDebug(`❌ Connect failed: ${error.message}`);
+                console.error('Connect failed:', error);
                 DOM.connectBtn.disabled = false;
             }
         }
@@ -1003,12 +1026,79 @@
         // --- Disconnect MQTT ---
         function disconnect() {
             if (mqttClient) {
-                logDebug("🔌 Disconnecting...");
                 mqttClient.end(true);
             }
         }
 
-        // --- Data Handlers ---
+        // --- Blynk Connection ---
+        function connectToBlynk() {
+            DOM.connectBlynkBtn.disabled = true;
+            
+            const testUrl = `https://blynk.cloud/external/api/update?token=${BLYNK_CONFIG.authToken}&pin=v0&value=0`;
+            
+            fetch(testUrl)
+                .then(response => {
+                    if (response.ok) {
+                        return response.text();
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                })
+                .then(result => {
+                    DOM.blynkStatus.textContent = 'Connected';
+                    DOM.blynkStatus.className = 'status-indicator status-connected';
+                    DOM.disconnectBlynkBtn.disabled = false;
+                })
+                .catch(error => {
+                    console.error("Connection test error:", error);
+                    DOM.connectBlynkBtn.disabled = false;
+                });
+        }
+
+        // --- Disconnect Blynk ---
+        function disconnectBlynk() {
+            if (blynkClient) {
+                blynkClient.end(true);
+            }
+        }
+
+        // --- Send Data to Blynk ---
+        function sendToBlynk(virtualPin, value) {
+            const url = `https://blynk.cloud/external/api/update?token=${BLYNK_CONFIG.authToken}&pin=V${virtualPin}&value=${value}`;
+            
+            fetch(url)
+                .then(response => {
+                    if (response.ok) {
+                        updateBlynkValueDisplay(virtualPin, value);
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                })
+                .catch(error => {
+
+                });
+        }
+
+        // --- Update Blynk Switches based on current state ---
+        function updateBlynkSwitches(stateValue) {
+            sendToBlynk(BLYNK_CONFIG.virtualPins.distracted, 0);
+            sendToBlynk(BLYNK_CONFIG.virtualPins.away, 0);
+            sendToBlynk(BLYNK_CONFIG.virtualPins.focus, 0);
+            
+            // Set the active state switch
+            switch(stateValue) {
+                case 1: // Focus
+                    sendToBlynk(BLYNK_CONFIG.virtualPins.focus, 1);
+                    break;
+                case 2: // Distracted
+                    sendToBlynk(BLYNK_CONFIG.virtualPins.distracted, 1);
+                    break;
+                case 3: // Away
+                    sendToBlynk(BLYNK_CONFIG.virtualPins.away, 1);
+                    break;
+            }
+        }
+
+        // --- Data Handlers with Blynk Integration ---
         function handleFocusState(state) {
             const stateMap = {
                 'Focus': 1,
@@ -1019,7 +1109,6 @@
             };
             const stateValue = stateMap[state] || 0;
 
-            // Update UI
             DOM.stateValue.textContent = state;
             DOM.currentStateBox.className = 'status-box';
             DOM.currentStateBox.classList.add(
@@ -1028,9 +1117,10 @@
                 state.includes('Away') ? 'away' : 'unknown'
             );
 
-            // Update charts
+            updateBlynkSwitches(stateValue);
+
             updateChartData(stateValue, null);
-            updateStateDistribution(); // Update distribution when state changes
+            updateStateDistribution();
         }
 
         function handleFocusConfidence(confidence) {
@@ -1038,33 +1128,34 @@
             
             const confidencePercent = Math.round(confidence * 100);
 
-            // Update chart only (no UI update in main tab)
+            // Send to Blynk as focus rate
+            sendToBlynk(BLYNK_CONFIG.virtualPins.focusRate, confidencePercent);
+
             updateChartData(null, confidencePercent);
         }
 
         function handleTemperature(temp) {
             if (isNaN(temp)) return;
             
-            // Update UI element
             DOM.temperatureValue.textContent = `${temp.toFixed(1)}°C`;
             
-            // Color coding based on comfort levels (from env_monitor.h)
             DOM.temperatureBox.className = 'status-box';
             if (temp >= 21.0 && temp <= 26.0) {
-                DOM.temperatureBox.classList.add('focus'); // Good
+                DOM.temperatureBox.classList.add('focus');
             } else if ((temp >= 16.0 && temp < 21.0) || (temp > 26.0 && temp <= 30.0)) {
-                DOM.temperatureBox.classList.add('away'); // Warning
+                DOM.temperatureBox.classList.add('away');
             } else {
-                DOM.temperatureBox.classList.add('distracted'); // Bad
+                DOM.temperatureBox.classList.add('distracted');
             }
 
-            // Update data storage
+            // Send to Blynk
+            sendToBlynk(BLYNK_CONFIG.virtualPins.temperature, temp.toFixed(1));
+
             if (stateData.timestamps.length >= STATE_LIMIT) {
                 stateData.temperatures.shift();
             }
             stateData.temperatures.push(temp);
             
-            // Update charts
             environmentChart.update();
             if (detailedEnvironmentChart) detailedEnvironmentChart.update();
         }
@@ -1072,26 +1163,25 @@
         function handleHumidity(humi) {
             if (isNaN(humi)) return;
             
-            // Update UI element
             DOM.humidityValue.textContent = `${Math.round(humi)}%`;
             
-            // Color coding based on comfort levels (from env_monitor.h)
             DOM.humidityBox.className = 'status-box';
             if (humi >= 40 && humi <= 60) {
-                DOM.humidityBox.classList.add('focus'); // Good
+                DOM.humidityBox.classList.add('focus');
             } else if ((humi >= 30 && humi < 40) || (humi > 60 && humi <= 70)) {
-                DOM.humidityBox.classList.add('away'); // Warning
+                DOM.humidityBox.classList.add('away');
             } else {
-                DOM.humidityBox.classList.add('distracted'); // Bad
+                DOM.humidityBox.classList.add('distracted');
             }
 
-            // Update data storage
+            // Send to Blynk
+            sendToBlynk(BLYNK_CONFIG.virtualPins.humidity, Math.round(humi));
+
             if (stateData.timestamps.length >= STATE_LIMIT) {
                 stateData.humidities.shift();
             }
             stateData.humidities.push(humi);
             
-            // Update charts
             environmentChart.update();
             if (detailedEnvironmentChart) detailedEnvironmentChart.update();
         }
@@ -1099,26 +1189,25 @@
         function handleLightLevel(light) {
             if (isNaN(light)) return;
             
-            // Update UI element
             DOM.lightValue.textContent = `${Math.round(light)}%`;
             
-            // Color coding based on comfort levels (from env_monitor.h)
             DOM.lightBox.className = 'status-box';
             if (light >= 50) {
-                DOM.lightBox.classList.add('focus'); // Good
+                DOM.lightBox.classList.add('focus');
             } else if (light >= 30 && light < 50) {
-                DOM.lightBox.classList.add('away'); // Warning
+                DOM.lightBox.classList.add('away');
             } else {
-                DOM.lightBox.classList.add('distracted'); // Bad
+                DOM.lightBox.classList.add('distracted');
             }
 
-            // Update data storage
+            // Send to Blynk
+            sendToBlynk(BLYNK_CONFIG.virtualPins.lightLevel, Math.round(light));
+
             if (stateData.timestamps.length >= STATE_LIMIT) {
                 stateData.lightLevels.shift();
             }
             stateData.lightLevels.push(light);
             
-            // Update charts
             environmentChart.update();
             if (detailedEnvironmentChart) detailedEnvironmentChart.update();
         }
@@ -1129,14 +1218,15 @@
 
         function handleSessionData(sessionPayload) {
             try {
-                const sessionData = JSON.parse(sessionPayload);
-                
-                if (sessionData.event === 'session_started') {
-                    const startTime = new Date(sessionData.timestamp);
+                // Handle plain string messages (from ESP32)
+                if (sessionPayload === "SESSION_START") {
+                    const startTime = new Date();
                     DOM.sessionValue.textContent = `Active (Started: ${startTime.toLocaleTimeString()})`;
                     DOM.sessionBox.className = 'status-box focus';
                     
-                    // Start new session
+                    // Send to Blynk
+                    sendToBlynk(BLYNK_CONFIG.virtualPins.sessionControl, 1);
+                    
                     currentSession = {
                         id: sessions.length + 1,
                         startTime: startTime,
@@ -1144,69 +1234,108 @@
                         duration: 0,
                         states: [],
                         distractions: 0,
-                        description: sessionData.description || 'No description',
+                        description: 'Study Session',
                         customName: null
                     };
-                } else if (sessionData.event === 'session_ended') {
+                    
+                    console.log("Session started:", currentSession);
+                    
+                } else if (sessionPayload === "SESSION_STOP") {
                     if (currentSession) {
-                        currentSession.endTime = new Date(sessionData.timestamp);
+                        currentSession.endTime = new Date();
                         const durationMs = currentSession.endTime - currentSession.startTime;
                         const minutes = Math.floor(durationMs / (1000 * 60));
                         const seconds = Math.floor((durationMs % (1000 * 60)) / 1000);
                         currentSession.duration = { minutes, seconds };
-                        currentSession.durationMs = durationMs; // Store for calculations
-                        currentSession.description = sessionData.description || currentSession.description;
-                        // Calculate state statistics
+                        currentSession.durationMs = durationMs;
                         currentSession.stateStats = calculateStateStats(currentSession.states);
                         
-                        // Add to sessions array
                         sessions.push(currentSession);
                         renderSessionList();
-                        
-                        // Save sessions to localStorage
                         saveSessions();
+                        
+                        console.log("Session ended:", currentSession);
                     }
                     
-                    DOM.sessionValue.textContent = `Ended (${sessionData.description || 'No description'})`;
+                    // Send to Blynk
+                    sendToBlynk(BLYNK_CONFIG.virtualPins.sessionControl, 0);
+                    
+                    DOM.sessionValue.textContent = `Ended (Duration: ${currentSession ? currentSession.duration.minutes + 'm ' + currentSession.duration.seconds + 's' : 'N/A'})`;
                     DOM.sessionBox.className = 'status-box unknown';
                     currentSession = null;
-                } else if (sessionData.event === 'connected') {
-                    DOM.sessionValue.textContent = `Device Connected (${sessionData.source})`;
-                    DOM.sessionBox.className = 'status-box unknown';
+                    
+                } else {
+                    // Try to parse as JSON for backward compatibility
+                    try {
+                        const sessionData = JSON.parse(sessionPayload);
+                        
+                        if (sessionData.event === 'session_started') {
+                            const startTime = new Date(sessionData.timestamp);
+                            DOM.sessionValue.textContent = `Active (Started: ${startTime.toLocaleTimeString()})`;
+                            DOM.sessionBox.className = 'status-box focus';
+                            
+                            sendToBlynk(BLYNK_CONFIG.virtualPins.sessionControl, 1);
+                            
+                            currentSession = {
+                                id: sessions.length + 1,
+                                startTime: startTime,
+                                endTime: null,
+                                duration: 0,
+                                states: [],
+                                distractions: 0,
+                                description: sessionData.description || 'No description',
+                                customName: null
+                            };
+                        } else if (sessionData.event === 'session_ended') {
+                            if (currentSession) {
+                                currentSession.endTime = new Date(sessionData.timestamp);
+                                const durationMs = currentSession.endTime - currentSession.startTime;
+                                const minutes = Math.floor(durationMs / (1000 * 60));
+                                const seconds = Math.floor((durationMs % (1000 * 60)) / 1000);
+                                currentSession.duration = { minutes, seconds };
+                                currentSession.durationMs = durationMs;
+                                currentSession.description = sessionData.description || currentSession.description;
+                                currentSession.stateStats = calculateStateStats(currentSession.states);
+                                
+                                sessions.push(currentSession);
+                                renderSessionList();
+                                saveSessions();
+                            }
+                            
+                            sendToBlynk(BLYNK_CONFIG.virtualPins.sessionControl, 0);
+                            
+                            DOM.sessionValue.textContent = `Ended (${sessionData.description || 'No description'})`;
+                            DOM.sessionBox.className = 'status-box unknown';
+                            currentSession = null;
+                        }
+                    } catch (jsonError) {
+                        // If it's not JSON either, log the raw message
+                        console.log('Raw session message:', sessionPayload);
+                        DOM.sessionValue.textContent = `Unknown: ${sessionPayload}`;
+                    }
                 }
             } catch (error) {
-                logDebug(`❌ Session data parse error: ${error.message}`);
-                DOM.sessionValue.textContent = `Invalid data`;
+                console.error('Session data parse error:', error);
+                DOM.sessionValue.textContent = `Error: ${error.message}`;
             }
         }
 
         function handleAlert(alertPayload) {
             try {
                 const alertData = JSON.parse(alertPayload);
-                
-                // Use non-intrusive notification instead of alert popup
                 showAlertNotification(alertData);
                 
-                // Browser notification (optional - less intrusive)
                 if (Notification.permission === 'granted') {
                     new Notification('Study Assistant Alert', { 
                         body: `${alertData.type || 'Alert'}: ${alertData.message || 'No message'}`,
                         icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🚨</text></svg>'
                     });
                 } else if (Notification.permission !== 'denied') {
-                    Notification.requestPermission().then(perm => {
-                        if (perm === 'granted') {
-                            new Notification('Study Assistant Alert', { 
-                                body: `${alertData.type || 'Alert'}: ${alertData.message || 'No message'}`,
-                                icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🚨</text></svg>'
-                            });
-                        }
-                    });
+                    Notification.requestPermission();
                 }
 
             } catch (error) {
-                logDebug(`❌ Alert parse error: ${error.message}`);
-                // Even for parse errors, use notification instead of alert
+                console.error('Alert parse error:', error);
                 showAlertNotification({
                     type: 'System Error',
                     message: 'Failed to parse alert data',
@@ -1219,24 +1348,20 @@
         function updateChartData(stateValue, confidenceValue) {
             const now = new Date().toLocaleTimeString();
 
-            // Trim old data
             if (stateData.timestamps.length >= STATE_LIMIT) {
                 stateData.timestamps.shift();
                 stateData.states.shift();
                 stateData.confidences.shift();
             }
 
-            // Add new data
             stateData.timestamps.push(now);
             stateData.states.push(stateValue !== null ? stateValue : stateData.states.at(-1) || 0);
             stateData.confidences.push(confidenceValue !== null ? confidenceValue : stateData.confidences.at(-1) || 0);
 
-            // Track state in current session if active
             if (currentSession && stateValue !== null) {
                 currentSession.states.push(stateValue);
             }
 
-            // Update all charts
             detailedStateChart.update();
         }
 
@@ -1248,11 +1373,17 @@
             logEntry.style.padding = '5px';
             logEntry.style.borderBottom = '1px solid #eee';
             
+            // Highlight session messages - move this AFTER creating the element
+            if (topic === MQTT_CONFIG.topics.session) {
+                logEntry.style.backgroundColor = '#e3f2fd';
+                logEntry.style.fontWeight = 'bold';
+            }
+            
             DOM.messageLog.appendChild(logEntry);
             DOM.messageLog.scrollTop = DOM.messageLog.scrollHeight;
         }
 
-        // Session list rendering
+        // Session Management Functions
         function renderSessionList() {
             if (sessions.length === 0) {
                 DOM.sessionList.innerHTML = '<p>No sessions recorded yet</p>';
@@ -1297,7 +1428,6 @@
                 sessions = sessions.filter(s => s.id !== sessionId);
                 saveSessions();
                 renderSessionList();
-                logDebug(`Session ${sessionId} deleted`);
             }
         }
 
@@ -1323,18 +1453,15 @@
                 session.customName = newName.trim();
                 saveSessions();
                 renderSessionList();
-                logDebug(`Session ${sessionId} renamed to "${newName}"`);
             } else {
-                renderSessionList(); // Re-render without changes if name is empty
+                renderSessionList();
             }
         }
 
-        // Session detail modal
         function showSessionDetails(sessionId) {
             const session = sessions.find(s => s.id === sessionId);
             if (!session) return;
 
-            // Update modal content
             DOM.modalSessionTitle.textContent = `Session ${session.id} - ${session.startTime.toLocaleDateString()}`;
             DOM.sessionDuration.textContent = `${session.duration.minutes}m ${session.duration.seconds}s`;
             
@@ -1353,15 +1480,12 @@
                 DOM.sessionDistractionTime.textContent = `${formatTime(distractionTimeSeconds)} (${session.stateStats.distracted}%)`;
                 DOM.sessionAwayTime.textContent = `${formatTime(awayTimeSeconds)} (${session.stateStats.away}%)`;
                 
-                // Initialize or update detail chart
                 initSessionDetailChart(session.stateStats);
             }
 
-            // Show modal
             DOM.sessionDetailModal.style.display = 'block';
         }
 
-        // Calculate state statistics for a session
         function calculateStateStats(states) {
             const counts = { 0: 0, 1: 0, 2: 0, 3: 0 };
             states.forEach(state => counts[state]++);
@@ -1375,7 +1499,6 @@
             };
         }
 
-        // Initialize session detail chart
         function initSessionDetailChart(stats) {
             const ctx = document.getElementById('session-detail-chart').getContext('2d');
             
@@ -1404,12 +1527,11 @@
             });
         }
 
-        // Save/load sessions from localStorage
         function saveSessions() {
             try {
                 localStorage.setItem('studySessions', JSON.stringify(sessions));
             } catch (error) {
-                logDebug(`❌ Error saving sessions: ${error.message}`);
+                console.error('Error saving sessions:', error);
             }
         }
 
@@ -1418,7 +1540,6 @@
                 const saved = localStorage.getItem('studySessions');
                 if (saved) {
                     sessions = JSON.parse(saved);
-                    // Convert timestamps back to Date objects
                     sessions.forEach(session => {
                         session.startTime = new Date(session.startTime);
                         if (session.endTime) session.endTime = new Date(session.endTime);
@@ -1426,7 +1547,7 @@
                     renderSessionList();
                 }
             } catch (error) {
-                logDebug(`❌ Error loading sessions: ${error.message}`);
+                console.error('Error loading sessions:', error);
                 sessions = [];
             }
         }
@@ -1444,13 +1565,8 @@
 
         // --- Initialize App ---
         window.onload = () => {
-            // Request notification permission
-            if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-                Notification.requestPermission();
-            }
-
             initCharts();
-            loadSessions(); // Load saved sessions
+            loadSessions();
         };
     </script>
 </body>

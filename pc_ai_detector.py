@@ -1,22 +1,15 @@
 import cv2
-import requests
 import time
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import json
-import urllib.request
-import tempfile
 import os
 import paho.mqtt.client as mqtt
 from datetime import datetime
 import threading
 
 # ========== CONFIGURATION ==========
-BLYNK_AUTH_TOKEN = "gLNztcV4mo_QL8rNxhRCyRDEZQ1JRO7H"
-BLYNK_TEMPLATE_ID = "TMPL6Aa3qBmmY"
-BLYNK_URL = "https://blynk.cloud/external/api"
-
 # Model path configuration
 MODEL_BASE_NAME = os.path.join(os.path.dirname(__file__), "EIE3127_StudyAssistant")
 
@@ -28,10 +21,6 @@ TOPIC_FOCUS_STATE = "studyassistant/focus/state"
 TOPIC_FOCUS_CONFIDENCE = "studyassistant/focus/confidence"
 TOPIC_ALERT = "studyassistant/alert/trigger"
 TOPIC_SESSION = "studyassistant/session/events"
-TOPIC_TEMPERATURE = "studyassistant/env/temperature" 
-TOPIC_HUMIDITY = "studyassistant/env/humidity"    
-TOPIC_LIGHT_LEVEL = "studyassistant/env/light"    
-ENV_DATA_POLL_INTERVAL = 5  # Poll every 5 seconds
 
 # ========== MQTT MANAGER ==========
 class MQTTManager:
@@ -75,90 +64,14 @@ class MQTTManager:
         if not self.connected:
             return False
         try:
-            # Existing MQTT publish logic
+            # Publish focus state and confidence to MQTT
             self.client.publish(TOPIC_FOCUS_STATE, posture)
             self.client.publish(TOPIC_FOCUS_CONFIDENCE, str(confidence))
             print(f"✓ MQTT: Published {posture} with {confidence:.2f} confidence")
-
-            # New: Update Blynk pins
-            self.update_blynk_pins(posture)
-
             return True
         except Exception as e:
             print(f"MQTT publish error: {e}")
             return False
-        
-    def get_blynk_environmental_data(self):
-        """Retrieve V4 (temperature), V5 (humidity), V6 (light) values from Blynk"""
-        try:
-            # Construct URLs for each virtual pin
-            temp_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v4"
-            humidity_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v5"
-            light_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v6"
-            
-            # Make HTTP GET requests to Blynk API
-            temperature = float(requests.get(temp_url, timeout=5).text)
-            humidity = float(requests.get(humidity_url, timeout=5).text)
-            light_level = float(requests.get(light_url, timeout=5).text)
-            
-            print(f"✓ Blynk data retrieved - Temp: {temperature}°C, Humi: {humidity}%, Light: {light_level}%")
-            return temperature, humidity, light_level
-            
-        except Exception as e:
-            print(f"✗ Blynk environmental data retrieval error: {e}")
-            return None, None, None
-
-    def get_blynk_session_control(self):
-        """Retrieve V7 (session control) value from Blynk - returns True for start, False for stop"""
-        try:
-            # Construct URL for V7 pin
-            session_url = f"{BLYNK_URL}/get?token={BLYNK_AUTH_TOKEN}&v7"
-            
-            # Make HTTP GET request to Blynk API
-            session_value = int(requests.get(session_url, timeout=5).text)
-            
-            # V7 is a switch: 1 = start session, 0 = stop session
-            session_state = bool(session_value)
-            print(f"✓ Blynk session control retrieved - V7: {session_value} ({'START' if session_state else 'STOP'})")
-            return session_state
-            
-        except Exception as e:
-            print(f"✗ Blynk session control retrieval error: {e}")
-            return None
-        
-    def publish_environmental_data(self, temperature, humidity, light_level):
-        if not self.connected:
-            return False
-        try:
-            # Publish each environmental parameter to its topic
-            self.client.publish(TOPIC_TEMPERATURE, f"{temperature:.1f}")
-            self.client.publish(TOPIC_HUMIDITY, f"{humidity:.0f}")
-            self.client.publish(TOPIC_LIGHT_LEVEL, f"{light_level:.0f}")
-            
-            print(f"✓ MQTT: Published env data - Temp: {temperature:.1f}°C, Humi: {humidity}%, Light: {light_level}%")
-            return True
-        except Exception as e:
-            print(f"MQTT environmental publish error: {e}")
-            return False
-
-    def handle_session_control(self, session_state):
-        """Handle session control based on V7 value from Blynk"""
-        if session_state is None:
-            return
-            
-        if session_state and not self.session_active:
-            # Start session
-            self.start_session()
-            self.session_active = True
-            print("✓ Session STARTED via Blynk V7")
-            self.publish_session_event("session_started", "Study session started via Blynk V7")
-            
-        elif not session_state and self.session_active:
-            # Stop session
-            self.end_session()
-            self.session_active = False
-            print("✓ Session STOPPED via Blynk V7")
-            self.publish_session_event("session_ended", "Study session ended via Blynk V7")
         
     def publish_alert(self, alert_type, message, confidence=0.0):
         if not self.connected:
@@ -195,14 +108,14 @@ class MQTTManager:
             
     def start_session(self):
         self.session_start_time = datetime.now()
-        self.publish_session_event("session_started", "Study session started via Blynk V7")
+        self.publish_session_event("session_started", "Study session started")
         print("✓ Study session started")
         
     def end_session(self):
         if self.session_start_time:
             duration = datetime.now() - self.session_start_time
             self.publish_session_event("session_ended", 
-                                     f"Study session ended via Blynk V7. Duration: {duration}")
+                                     f"Study session ended. Duration: {duration}")
             print(f"✓ Study session ended. Duration: {duration}")
             self.session_start_time = None
             
@@ -214,40 +127,6 @@ class MQTTManager:
                 print("✓ MQTT disconnected")
         except Exception as e:
             print(f"MQTT disconnect error: {e}")
-
-    def update_blynk_pins(self, state):
-        """Update Blynk virtual pins based on detected state (only V0, V1, V2)"""
-        if not BLYNK_AUTH_TOKEN:
-            print("✗ Blynk auth token missing - skipping update")
-            return False
-
-        try:
-            # Reset all state pins first (ensure only one state is active)
-            requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0&v1=0&v2=0")
-
-            # Map detected state to corresponding virtual pin
-            if state == "Distracted" or state == "Distracted - Phone":
-                # Set V0 (Distracted) to 1
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=1")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=0")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=0")
-            elif state == "Away":
-                # Set V1 (Away) to 1
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=1")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=0")
-            elif state == "Focus":
-                # Set V2 (Focused) to 1
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v0=0")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v1=0")
-                requests.get(f"{BLYNK_URL}/update?token={BLYNK_AUTH_TOKEN}&v2=1")
-
-            print(f"✓ Blynk updated: {state} (V0/V1/V2)")
-            return True
-
-        except Exception as e:
-            print(f"✗ Blynk update error: {e}")
-            return False
 
 # ========== POSE CLASSIFIER ==========
 class PoseClassifier:
@@ -381,38 +260,167 @@ class PoseClassifier:
             print(f"Prediction error: {e}")
             return None, 0.0
 
+# ========== AI DETECTION THREAD ==========
+class AIDetectionThread(threading.Thread):
+    def __init__(self, classifier, mqtt_manager):
+        super().__init__()
+        self.classifier = classifier
+        self.mqtt = mqtt_manager
+        self.running = True
+        self.cap = None
+        self.last_class_name = "Unknown"
+        self.last_confidence = 0.0
+        
+    def setup_camera(self):
+        """Initialize camera for AI detection"""
+        self.cap = cv2.VideoCapture(0)
+        if self.cap.isOpened():
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            print("✓ AI Detection: Camera initialized")
+            return True
+        else:
+            print("✗ AI Detection: Could not open camera")
+            return False
+    
+    def run(self):
+        """Main AI detection loop"""
+        print("🚀 Starting AI Detection Thread")
+        
+        if not self.setup_camera():
+            return
+            
+        prediction_counter = 0
+        PREDICTION_INTERVAL = 3  # Only predict every 3 frames
+        
+        try:
+            while self.running:
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("✗ AI Detection: Could not read frame from camera")
+                    time.sleep(1)
+                    continue
+                
+                # Get prediction
+                prediction_counter += 1
+                if prediction_counter % PREDICTION_INTERVAL == 0:
+                    class_name, confidence = self.classifier.predict(frame)
+                    prediction_counter = 0
+
+                    if class_name:
+                        # Store last state
+                        self.last_class_name = class_name
+                        self.last_confidence = confidence
+                        
+                        # Display on frame
+                        cv2.putText(frame, 
+                                    f"{class_name}: {confidence:.2f}", 
+                                    (10, 30), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 
+                                    1, (0, 255, 0), 2)
+                        
+                        # Send detection data to MQTT publisher via queue
+                        detection_data = {
+                            'type': 'detection',
+                            'posture': class_name,
+                            'confidence': confidence,
+                            'timestamp': time.time()
+                        }
+                        
+                        # Store for MQTT publisher thread to pick up
+                        self.last_detection_data = detection_data
+                        
+                        # Trigger alerts for low focus states (only if session is active)
+                        if self.mqtt.session_active and ("Distracted" in class_name or class_name == "Away"):
+                            if confidence > 0.7:
+                                self.mqtt.publish_alert("focus_loss", f"Detected {class_name}", confidence)
+                else:
+                    # Display last known state
+                    cv2.putText(frame, 
+                               f"{self.last_class_name}: {self.last_confidence:.2f}", 
+                               (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                # Display frame
+                try:
+                    cv2.imshow('Study Assistant - AI Detection (Press Q to Exit)', frame)
+                except Exception as e:
+                    print(f"AI Detection: OpenCV display error: {e}")
+                    break
+
+                # Check for exit key
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:
+                    self.running = False
+                
+                time.sleep(0.1)  # ~10 FPS
+                
+        except Exception as e:
+            print(f"AI Detection Thread error: {e}")
+        finally:
+            self.cleanup()
+    
+    def cleanup(self):
+        """Clean up AI detection resources"""
+        if self.cap:
+            self.cap.release()
+        cv2.destroyAllWindows()
+        print("✓ AI Detection Thread cleaned up")
+    
+    def stop(self):
+        """Stop the AI detection thread"""
+        self.running = False
+
+# ========== MQTT PUBLISHER THREAD ==========
+class MQTTPublisherThread(threading.Thread):
+    def __init__(self, mqtt_manager, ai_detection_thread):
+        super().__init__()
+        self.mqtt = mqtt_manager
+        self.ai_thread = ai_detection_thread
+        self.running = True
+        self.detection_poll_interval = 1  # Check for new detections every 1 second
+        self.last_detection_poll_time = 0
+        
+    def run(self):
+        """Main MQTT publishing loop"""
+        print("🚀 Starting MQTT Publisher Thread")
+        
+        try:
+            while self.running:
+                current_time = time.time()
+                
+                # Check for new detection data from AI thread
+                if current_time - self.last_detection_poll_time >= self.detection_poll_interval:
+                    if hasattr(self.ai_thread, 'last_detection_data'):
+                        detection_data = self.ai_thread.last_detection_data
+                        if detection_data['type'] == 'detection':
+                            # Publish detection data to MQTT
+                            self.mqtt.publish_focus_state(
+                                detection_data['posture'], 
+                                detection_data['confidence']
+                            )
+                    self.last_detection_poll_time = current_time
+                
+                time.sleep(0.1)  # Small sleep to prevent busy waiting
+                
+        except Exception as e:
+            print(f"MQTT Publisher Thread error: {e}")
+        finally:
+            print("✓ MQTT Publisher Thread stopped")
+    
+    def stop(self):
+        """Stop the MQTT publisher thread"""
+        self.running = False
+
 # ========== MAIN APPLICATION ==========
 class StudyAssistantApp:
     def __init__(self):
         self.classifier = PoseClassifier()
         self.mqtt = MQTTManager()
+        self.ai_detection_thread = None
+        self.mqtt_publisher_thread = None
         self.running = False
-        self.cap = None
-        self.last_env_poll_time = 0
-        self.last_session_poll_time = 0
-        self.blynk_thread = None
-        self.stop_blynk_thread = False
         
-    def start_blynk_polling(self):
-        """Run Blynk polling in a separate thread to avoid lag"""
-        while self.running and not self.stop_blynk_thread:
-            try:
-                # Poll environmental data
-                temperature, humidity, light_level = self.mqtt.get_blynk_environmental_data()
-                if temperature is not None and humidity is not None and light_level is not None:
-                    self.mqtt.publish_environmental_data(temperature, humidity, light_level)
-                
-                # Poll session control
-                session_state = self.mqtt.get_blynk_session_control()
-                if session_state is not None:
-                    self.mqtt.handle_session_control(session_state)
-                    
-            except Exception as e:
-                print(f"Blynk polling error: {e}")
-            
-            # Sleep for polling interval
-            time.sleep(ENV_DATA_POLL_INTERVAL)
-
     def setup(self):
         """Setup all components"""
         # Load model
@@ -424,134 +432,55 @@ class StudyAssistantApp:
         if not self.mqtt.connect():
             print("⚠️ Warning: Could not connect to MQTT. Continuing with local mode.")
         
-        # Initialize camera
-        self.cap = cv2.VideoCapture(0)  # Use 0 for default camera
-        if self.cap.isOpened():
-            # Reduce resolution to lower CPU load
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # instead of 1280
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # instead of 720
-            print("✓ Camera initialized with reduced resolution")
-        
-        if not self.cap.isOpened():
-            print("✗ Could not open camera. Trying other indices...")
-            # Try other common camera indices
-            for i in range(1, 4):
-                self.cap = cv2.VideoCapture(i)
-                if self.cap.isOpened():
-                    print(f"✓ Camera found at index {i}")
-                    break
-            if not self.cap.isOpened():
-                print("✗ Critical error: No camera available. Exiting.")
-                return False
-                
         self.running = True
         return True
         
-    def poll_environmental_data(self):
-        """Poll Blynk for environmental data at regular intervals"""
-        current_time = time.time()
-        if current_time - self.last_env_poll_time >= ENV_DATA_POLL_INTERVAL:
-            temperature, humidity, light_level = self.mqtt.get_blynk_environmental_data()
-            if temperature is not None and humidity is not None and light_level is not None:
-                self.mqtt.publish_environmental_data(temperature, humidity, light_level)
-            self.last_env_poll_time = current_time
-
-    def poll_session_control(self):
-        """Poll Blynk for session control (V7) at regular intervals"""
-        current_time = time.time()
-        if current_time - self.last_session_poll_time >= ENV_DATA_POLL_INTERVAL:
-            session_state = self.mqtt.get_blynk_session_control()
-            if session_state is not None:
-                self.mqtt.handle_session_control(session_state)
-            self.last_session_poll_time = current_time
-        
     def run(self):
-        """Main loop"""
-        if not self.running:
-            if not self.setup():
-                return
-                
-        print("\nStarting main loop. Press 'q' to quit.")
-        
-        # START BLYNK POLLING THREAD (ADD THIS)
-        self.stop_blynk_thread = False
-        self.blynk_thread = threading.Thread(target=self.start_blynk_polling)
-        self.blynk_thread.daemon = True
-        self.blynk_thread.start()
-        
-        prediction_counter = 0
-        PREDICTION_INTERVAL = 3  # Only predict every 3 frames
+        """Start both threads and manage application"""
+        if not self.setup():
+            return
+            
+        print("\n🚀 Starting Study Assistant with Double Threads")
+        print("   - Thread 1: AI Detection (Camera processing)")
+        print("   - Thread 2: MQTT Publisher (Data publishing)")
+        print("   Press 'q' in the camera window to exit\n")
         
         try:
-            while self.running:
-                ret, frame = self.cap.read()
-                if not ret:
-                    print("✗ Could not read frame from camera")
-                    time.sleep(1)
-                    continue
-                
-                # Get prediction
-                prediction_counter += 1
-                if prediction_counter % PREDICTION_INTERVAL == 0:
-                    class_name, confidence = self.classifier.predict(frame)
-                    prediction_counter = 0
-
-                    if class_name:
-                        # Store last state for display
-                        self.last_class_name = class_name
-                        self.last_confidence = confidence
-                        
-                        # Display on frame
-                        cv2.putText(frame, 
-                                    f"{class_name}: {confidence:.2f}", 
-                                    (10, 30), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 
-                                    1, (0, 255, 0), 2)
-                        
-                        # Publish to MQTT if connected
-                        self.mqtt.publish_focus_state(class_name, confidence)
-                        
-                        # Trigger alerts for low focus states (only if session is active)
-                        if self.mqtt.session_active and ("Distracted" in class_name or class_name == "Away"):
-                            if confidence > 0.7:
-                                self.mqtt.publish_alert("focus_loss", f"Detected {class_name}", confidence)
-                else:
-                    if hasattr(self, 'last_class_name'):
-                        cv2.putText(frame, f"{self.last_class_name}: {self.last_confidence:.2f}", (10, 30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                
-                try:
-                    cv2.imshow('Study Assistant - Press Q to Exit', frame)
-                except Exception as e:
-                    print(f"OpenCV display error: {e}")
-                    break
-
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or key == 27:  # Q or ESC key
-                    self.running = False
-                
-                time.sleep(0.1)  # ~10 FPS
-                
+            # Create and start threads
+            self.ai_detection_thread = AIDetectionThread(self.classifier, self.mqtt)
+            self.mqtt_publisher_thread = MQTTPublisherThread(self.mqtt, self.ai_detection_thread)
+            
+            # Start threads
+            self.ai_detection_thread.start()
+            self.mqtt_publisher_thread.start()
+            
+            # Wait for AI detection thread to finish (it handles the GUI and user input)
+            self.ai_detection_thread.join()
+            
         except KeyboardInterrupt:
             print("\nReceived keyboard interrupt")
         finally:
             self.cleanup()
             
     def cleanup(self):
-        """Clean up resources"""
+        """Clean up all resources"""
         print("\nCleaning up...")
         self.running = False
-        self.stop_blynk_thread = True  # Stop the thread
         
-        # Wait for thread to finish (ADD THIS)
-        if self.blynk_thread and self.blynk_thread.is_alive():
-            self.blynk_thread.join(timeout=2.0)
+        # Stop threads
+        if self.ai_detection_thread:
+            self.ai_detection_thread.stop()
+            self.ai_detection_thread.join(timeout=2.0)
+            
+        if self.mqtt_publisher_thread:
+            self.mqtt_publisher_thread.stop()
+            self.mqtt_publisher_thread.join(timeout=2.0)
         
-        if self.cap:
-            self.cap.release()
-        cv2.destroyAllWindows()
+        # End session if active
         if self.mqtt.session_active:
             self.mqtt.end_session()
+        
+        # Disconnect MQTT
         self.mqtt.disconnect()
         print("✓ Cleanup complete")
 
