@@ -24,17 +24,17 @@ void EnvMonitor::begin() {
   pinMode(m_ledB_Y, OUTPUT); digitalWrite(m_ledB_Y, LOW);
   pinMode(m_ledB_G, OUTPUT); digitalWrite(m_ledB_G, LOW);
 
-  // Buzzer (use LEDC tone on ESP32; start silent)
+  // Buzzer
   pinMode(m_buzzer, OUTPUT); digitalWrite(m_buzzer, LOW);
   ledcAttach(m_buzzer, BUZZ_TONE_HZ, 8);   // set up PWM on this pin (auto channel), 8-bit res
-  ledcWriteTone(m_buzzer, 0);              // silence
+  ledcWriteTone(m_buzzer, 0);  
 
   // Sensors
   dht.begin();
 
   // ADC config for ESP32-S3
-  analogReadResolution(12);                      // 0..4095
-  analogSetPinAttenuation(m_pinLDR, ADC_11db);   // good for 3.3 V LDR module
+  analogReadResolution(12);
+  analogSetPinAttenuation(m_pinLDR, ADC_11db);
 
   // OLED
   oled.begin();
@@ -63,8 +63,6 @@ void EnvMonitor::tick() {
     } else {
       m_rd.humi  = (int)roundf(h);
       m_rd.tempC = t;
-      Serial.printf("DHT: %.1f C, %d %%RH; LDR: %d%%\n",
-                    m_rd.tempC, m_rd.humi, m_rd.lightPct);
     }
   }
 
@@ -154,7 +152,7 @@ void EnvMonitor::setDetectionMode(DetMode m) {
       // Start with ON state immediately; blink handled in driveDetectionOutputs()
       m_blinkOn = true;
       digitalWrite(m_ledB_R, HIGH);
-      ledcWriteTone(m_buzzer, BUZZ_TONE_HZ); // high-frequency tone
+      ledcWriteTone(m_buzzer, BUZZ_TONE_HZ);
       break;
 
     case DET_FOCUSED:
@@ -170,7 +168,7 @@ void EnvMonitor::setDetectionMode(DetMode m) {
 }
 
 void EnvMonitor::driveDetectionOutputs() {
-  // Handle 1 Hz blink for DET_DISTRACTED (buzzer tone toggles with LED)
+  // Handle 1 Hz blink for DET_DISTRACTED (buzzer toggles with LED)
   if (m_detMode == DET_DISTRACTED) {
     uint32_t now = millis();
     if (now - m_lastBlinkMs >= BLINK_HALF_PERIOD_MS) {
@@ -178,10 +176,10 @@ void EnvMonitor::driveDetectionOutputs() {
       m_blinkOn = !m_blinkOn;
 
       digitalWrite(m_ledB_R, m_blinkOn ? HIGH : LOW);
-      ledcWriteTone(m_buzzer, m_blinkOn ? BUZZ_TONE_HZ : 0); // play/stop tone
+      ledcWriteTone(m_buzzer, m_blinkOn ? BUZZ_TONE_HZ : 0); // play/stop buzzer
     }
   } else {
-    // Other modes: make sure buzzer is silent
+    // Other modes: make sure buzzer is off
     ledcWriteTone(m_buzzer, 0);
   }
 }

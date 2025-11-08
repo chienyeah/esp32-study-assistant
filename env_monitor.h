@@ -62,7 +62,7 @@ private:
   int   m_LIGHT_LOW_PCT = 30;    // <30% bad
   int   m_LIGHT_GOOD_PCT = 50;   // >=50% good
 
-  // Buzzer tone (passive buzzer needs PWM tone). 2.5 kHz is a crisp “high” tone.
+  // Buzzer tone
   const uint32_t BUZZ_TONE_HZ = 2500;
 
   // State
