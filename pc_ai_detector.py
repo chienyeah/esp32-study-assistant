@@ -10,7 +10,7 @@ from datetime import datetime
 import threading
 
 # ========== CONFIGURATION ==========
-MODEL_BASE_NAME = os.path.join(os.path.dirname(__file__), "EIE3127_StudyAssistant")
+MODEL_BASE_NAME = os.path.join(os.path.dirname(__file__), "models")
 
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
