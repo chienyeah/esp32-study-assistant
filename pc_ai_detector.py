@@ -10,10 +10,8 @@ from datetime import datetime
 import threading
 
 # ========== CONFIGURATION ==========
-# Model path configuration
 MODEL_BASE_NAME = os.path.join(os.path.dirname(__file__), "EIE3127_StudyAssistant")
 
-# MQTT Configuration
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = f"study_assistant_pc_{int(time.time())}"
@@ -138,7 +136,6 @@ class PoseClassifier:
         self.is_multi_input = False
         
     def load_model(self):
-        """Load Teachable Machine model with error handling"""
         try:
             print("Loading Teachable Machine Pose Model...")
 
@@ -226,7 +223,6 @@ class PoseClassifier:
             return [line.strip().split(' ', 1)[1] for line in f if line.strip()]
     
     def preprocess_image(self, frame):
-        """Preprocess image for model prediction"""
         # Resize to model input size
         img = cv2.resize(frame, self.input_size)
         # Convert to RGB (Teachable Machine uses RGB)
@@ -237,25 +233,19 @@ class PoseClassifier:
         return np.expand_dims(img, axis=0)
     
     def predict(self, frame):
-        """Make prediction on frame"""
         if not self.is_loaded or self.model is None:
             return None, 0.0
-            
         try:
             processed = self.preprocess_image(frame)
-            
             # Handle multi-input models
             if self.is_multi_input:
                 predictions = self.model.predict([processed])[0]
             else:
                 predictions = self.model.predict(processed)[0]
-                
             max_index = np.argmax(predictions)
             confidence = float(predictions[max_index])
             class_name = self.class_names[max_index] if max_index < len(self.class_names) else "Unknown"
-            
             return class_name, confidence
-            
         except Exception as e:
             print(f"Prediction error: {e}")
             return None, 0.0
@@ -285,14 +275,11 @@ class AIDetectionThread(threading.Thread):
     
     def run(self):
         """Main AI detection loop"""
-        print("🚀 Starting AI Detection Thread")
-        
+        print("Starting AI Detection Thread")
         if not self.setup_camera():
             return
-            
         prediction_counter = 0
-        PREDICTION_INTERVAL = 3  # Only predict every 3 frames
-        
+        PREDICTION_INTERVAL = 3
         try:
             while self.running:
                 ret, frame = self.cap.read()
@@ -300,7 +287,6 @@ class AIDetectionThread(threading.Thread):
                     print("✗ AI Detection: Could not read frame from camera")
                     time.sleep(1)
                     continue
-                
                 # Get prediction
                 prediction_counter += 1
                 if prediction_counter % PREDICTION_INTERVAL == 0:
@@ -340,20 +326,18 @@ class AIDetectionThread(threading.Thread):
                                f"{self.last_class_name}: {self.last_confidence:.2f}", 
                                (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                
-                # Display frame
+
                 try:
                     cv2.imshow('Study Assistant - AI Detection (Press Q to Exit)', frame)
                 except Exception as e:
                     print(f"AI Detection: OpenCV display error: {e}")
                     break
 
-                # Check for exit key
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q') or key == 27:
                     self.running = False
                 
-                time.sleep(0.1)  # ~10 FPS
+                time.sleep(0.1)
                 
         except Exception as e:
             print(f"AI Detection Thread error: {e}")
@@ -383,7 +367,7 @@ class MQTTPublisherThread(threading.Thread):
         
     def run(self):
         """Main MQTT publishing loop"""
-        print("🚀 Starting MQTT Publisher Thread")
+        print("Starting MQTT Publisher Thread")
         
         try:
             while self.running:
@@ -401,7 +385,7 @@ class MQTTPublisherThread(threading.Thread):
                             )
                     self.last_detection_poll_time = current_time
                 
-                time.sleep(0.1)  # Small sleep to prevent busy waiting
+                time.sleep(0.1) 
                 
         except Exception as e:
             print(f"MQTT Publisher Thread error: {e}")
@@ -423,14 +407,13 @@ class StudyAssistantApp:
         
     def setup(self):
         """Setup all components"""
-        # Load model
         if not self.classifier.load_model():
             print("✗ Critical error: Could not load model. Exiting.")
             return False
             
         # Connect MQTT
         if not self.mqtt.connect():
-            print("⚠️ Warning: Could not connect to MQTT. Continuing with local mode.")
+            print("Could not connect to MQTT. Continuing with local mode.")
         
         self.running = True
         return True
@@ -440,7 +423,7 @@ class StudyAssistantApp:
         if not self.setup():
             return
             
-        print("\n🚀 Starting Study Assistant with Double Threads")
+        print("\nStarting Study Assistant with Double Threads")
         print("   - Thread 1: AI Detection (Camera processing)")
         print("   - Thread 2: MQTT Publisher (Data publishing)")
         print("   Press 'q' in the camera window to exit\n")
@@ -454,7 +437,6 @@ class StudyAssistantApp:
             self.ai_detection_thread.start()
             self.mqtt_publisher_thread.start()
             
-            # Wait for AI detection thread to finish (it handles the GUI and user input)
             self.ai_detection_thread.join()
             
         except KeyboardInterrupt:
@@ -475,12 +457,10 @@ class StudyAssistantApp:
         if self.mqtt_publisher_thread:
             self.mqtt_publisher_thread.stop()
             self.mqtt_publisher_thread.join(timeout=2.0)
-        
-        # End session if active
+
         if self.mqtt.session_active:
             self.mqtt.end_session()
-        
-        # Disconnect MQTT
+
         self.mqtt.disconnect()
         print("✓ Cleanup complete")
 

@@ -260,13 +260,13 @@ void handleSessionMessage(String message) {
     focusTime = 0;
     sessionActive = true;
     if (blynkConnected) Blynk.virtualWrite(V8, 0);
-    Serial.println("🎯 Session STARTED from MQTT");
+    Serial.println("Session STARTED from MQTT");
   } else if (message == "SESSION_STOP" && sessionActive) {
     sessionActive = false;
     unsigned long totalTime = (millis() - sessionStartTime) / 1000;
     float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
     if (blynkConnected) Blynk.virtualWrite(V8, focusRatio * 100);
-    Serial.printf("⏹️ Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
+    Serial.printf("Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
   }
 }
 
@@ -458,12 +458,10 @@ void updateFocusTimeTracking() {
   static String previousFocusState = "UNKNOWN";
   static unsigned long lastFocusLog = 0;
   
-  if (millis() - lastFocusCheck > 1000) { // Check every second
+  if (millis() - lastFocusCheck > 1000) { 
     if (sessionActive) {
-      // Only count time when actually in FOCUSED state
       if (currentFocusState == "FOCUSED") {
         focusTime++;
-        // Only log focus time every 30 seconds to reduce serial output
         if (millis() - lastFocusLog > 30000) {
           Serial.printf("Focus time: %lu seconds\n", focusTime);
           lastFocusLog = millis();
@@ -484,7 +482,7 @@ BLYNK_WRITE(V7) {
     focusTime = 0;
     sessionActive = true;
     Blynk.virtualWrite(V8, 0);
-    Serial.println("🎯 Session STARTED from Blynk");
+    Serial.println("Session STARTED from Blynk");
     
     // Publish to MQTT
     if (mqttConnected) {
@@ -497,7 +495,7 @@ BLYNK_WRITE(V7) {
     unsigned long totalTime = (millis() - sessionStartTime) / 1000;
     float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
     Blynk.virtualWrite(V8, focusRatio * 100);
-    Serial.printf("⏹️ Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
+    Serial.printf("Session ENDED - Focus Ratio: %.1f%%\n", focusRatio * 100);
     
     // Publish to MQTT
     if (mqttConnected) {
@@ -535,7 +533,7 @@ void handleSerialCommand() {
     } else {
       unsigned long totalTime = (millis() - sessionStartTime) / 1000;
       float focusRatio = totalTime > 0 ? (float)focusTime / totalTime : 0;
-      Serial.printf("⏹️ Session ENDED - Focus: %lus/%lus (%.1f%%)\n", 
+      Serial.printf("Session ENDED - Focus: %lus/%lus (%.1f%%)\n", 
                    focusTime, totalTime, focusRatio * 100);
       sessionActive = false;
       // Publish to MQTT

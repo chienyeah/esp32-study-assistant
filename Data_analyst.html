@@ -739,10 +739,14 @@
             }, 8000);
         }
 
+        function skipped(ctx, value) {
+            return ctx.p0.skip || ctx.p1.skip ? value : undefined;
+        }
+
         // --- Initialize All Charts ---
         function initCharts() {
             try {
-                // 1. Environmental Chart (Main Tab)
+                // 1. Environmental Chart (Main Tab) - UPDATED
                 const envCtx = document.getElementById('environmentChart').getContext('2d');
                 environmentChart = new Chart(envCtx, {
                     type: 'line',
@@ -756,7 +760,14 @@
                                 backgroundColor: 'rgba(255, 87, 34, 0.1)',
                                 fill: true,
                                 tension: 0.3,
-                                yAxisID: 'y'
+                                yAxisID: 'y',
+                                pointRadius: 3, // Smaller points for clarity
+                                pointBackgroundColor: '#ff5722',
+                                spanGaps: true, // Add this line
+                                segment: { // Add this for better visual handling of gaps
+                                    borderColor: ctx => skipped(ctx, '#ff5722'),
+                                    borderDash: ctx => skipped(ctx, [6, 6]),
+                                }
                             },
                             {
                                 label: 'Humidity (%)',
@@ -765,7 +776,9 @@
                                 backgroundColor: 'rgba(33, 150, 243, 0.1)',
                                 fill: true,
                                 tension: 0.3,
-                                yAxisID: 'y1'
+                                yAxisID: 'y1',
+                                pointRadius: 3,
+                                pointBackgroundColor: '#2196f3'
                             },
                             {
                                 label: 'Light Level (%)',
@@ -774,27 +787,58 @@
                                 backgroundColor: 'rgba(255, 235, 59, 0.1)',
                                 fill: true,
                                 tension: 0.3,
-                                yAxisID: 'y1'
+                                yAxisID: 'y1',
+                                pointRadius: 3,
+                                pointBackgroundColor: '#ffeb3b'
                             }
                         ]
                     },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index', // Show all data points at the same X position
+                            intersect: false // Don't require exact point click
+                        },
                         scales: {
+                            x: {
+                                type: 'category',
+                                title: { display: true, text: 'Time' },
+                                grid: { display: false },
+                                ticks: { 
+                                    maxRotation: 0, 
+                                    autoSkip: true, 
+                                    maxTicksLimit: 8 // Prevent label overcrowding
+                                }
+                            },
                             y: {
                                 type: 'linear',
                                 display: true,
                                 position: 'left',
-                                title: { display: true, text: 'Temperature (°C)' }
+                                title: { display: true, text: 'Temperature (°C)' },
+                                suggestedMin: 15, // Start at a reasonable temperature
+                                suggestedMax: 35, // End at a reasonable temperature
+                                grid: { color: 'rgba(0, 0, 0, 0.05)' }
                             },
                             y1: {
                                 type: 'linear',
                                 display: true,
                                 position: 'right',
                                 title: { display: true, text: 'Percentage (%)' },
+                                min: 0,
                                 max: 100,
-                                grid: { drawOnChartArea: false }
+                                grid: { drawOnChartArea: false } // Don't overlap grids
+                            }
+                        },
+                        plugins: {
+                            legend: { position: 'top' },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                padding: 10,
+                                titleFont: { size: 14 },
+                                bodyFont: { size: 12 }
                             }
                         }
                     }
@@ -1134,6 +1178,66 @@
             updateChartData(null, confidencePercent);
         }
 
+        function updateEnvironmentalData(type, value) {
+            const now = new Date().toLocaleTimeString();
+            
+            console.log(`Updating ${type} with value:`, value, 'at', now);
+
+            // Add new timestamp if we're starting fresh or need to advance
+            if (stateData.timestamps.length === 0) {
+                stateData.timestamps.push(now);
+            } else {
+                // Only add new timestamp if we're at capacity and need to shift
+                if (stateData.timestamps.length >= STATE_LIMIT) {
+                    stateData.timestamps.shift();
+                    stateData.temperatures.shift();
+                    stateData.humidities.shift();
+                    stateData.lightLevels.shift();
+                }
+                // Add current timestamp for the new data point
+                stateData.timestamps.push(now);
+            }
+
+            // Update the specific data array
+            switch(type) {
+                case 'temperature':
+                    stateData.temperatures.push(value);
+                    // For other arrays, push their last value or null if empty
+                    stateData.humidities.push(stateData.humidities.length > 0 ? stateData.humidities[stateData.humidities.length - 1] : null);
+                    stateData.lightLevels.push(stateData.lightLevels.length > 0 ? stateData.lightLevels[stateData.lightLevels.length - 1] : null);
+                    break;
+                case 'humidity':
+                    stateData.humidities.push(value);
+                    stateData.temperatures.push(stateData.temperatures.length > 0 ? stateData.temperatures[stateData.temperatures.length - 1] : null);
+                    stateData.lightLevels.push(stateData.lightLevels.length > 0 ? stateData.lightLevels[stateData.lightLevels.length - 1] : null);
+                    break;
+                case 'light':
+                    stateData.lightLevels.push(value);
+                    stateData.temperatures.push(stateData.temperatures.length > 0 ? stateData.temperatures[stateData.temperatures.length - 1] : null);
+                    stateData.humidities.push(stateData.humidities.length > 0 ? stateData.humidities[stateData.humidities.length - 1] : null);
+                    break;
+            }
+
+            // Ensure all arrays are the same length
+            const targetLength = stateData.timestamps.length;
+            while (stateData.temperatures.length < targetLength) stateData.temperatures.push(null);
+            while (stateData.humidities.length < targetLength) stateData.humidities.push(null);
+            while (stateData.lightLevels.length < targetLength) stateData.lightLevels.push(null);
+
+            console.log('Updated data:', {
+                timestamps: stateData.timestamps.length,
+                temperatures: stateData.temperatures,
+                humidities: stateData.humidities,
+                lightLevels: stateData.lightLevels
+            });
+
+            // Update both environmental charts
+            if (environmentChart) {
+                environmentChart.update();
+                console.log('Environment chart updated');
+            }
+            if (detailedEnvironmentChart) detailedEnvironmentChart.update();
+        }
         function handleTemperature(temp) {
             if (isNaN(temp)) return;
             
@@ -1151,13 +1255,8 @@
             // Send to Blynk
             sendToBlynk(BLYNK_CONFIG.virtualPins.temperature, temp.toFixed(1));
 
-            if (stateData.timestamps.length >= STATE_LIMIT) {
-                stateData.temperatures.shift();
-            }
-            stateData.temperatures.push(temp);
-            
-            environmentChart.update();
-            if (detailedEnvironmentChart) detailedEnvironmentChart.update();
+            // Use reusable function to update chart data
+            updateEnvironmentalData('temperature', temp);
         }
 
         function handleHumidity(humi) {
@@ -1177,13 +1276,8 @@
             // Send to Blynk
             sendToBlynk(BLYNK_CONFIG.virtualPins.humidity, Math.round(humi));
 
-            if (stateData.timestamps.length >= STATE_LIMIT) {
-                stateData.humidities.shift();
-            }
-            stateData.humidities.push(humi);
-            
-            environmentChart.update();
-            if (detailedEnvironmentChart) detailedEnvironmentChart.update();
+            // Use reusable function to update chart data
+            updateEnvironmentalData('humidity', humi);
         }
 
         function handleLightLevel(light) {
@@ -1203,13 +1297,8 @@
             // Send to Blynk
             sendToBlynk(BLYNK_CONFIG.virtualPins.lightLevel, Math.round(light));
 
-            if (stateData.timestamps.length >= STATE_LIMIT) {
-                stateData.lightLevels.shift();
-            }
-            stateData.lightLevels.push(light);
-            
-            environmentChart.update();
-            if (detailedEnvironmentChart) detailedEnvironmentChart.update();
+            // Use reusable function to update chart data
+            updateEnvironmentalData('light', light);
         }
 
         let sessions = [];
